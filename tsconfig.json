@@ -1,0 +1,18 @@
+{
+    "compilerOptions": {
+        "lib": [
+            "es5",
+            "es2015.promise"
+        ],
+        "skipDefaultLibCheck": true,
+        "skipLibCheck": true,
+        "strict": true,
+        "target": "es5",
+        "module": "commonjs",
+        "moduleResolution": "node",
+        "experimentalDecorators": true,
+        "emitDecoratorMetadata": true,
+        "noImplicitAny": true,
+
+    }
+}

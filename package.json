@@ -1,0 +1,45 @@
+{
+  "name": "reverse_toolsets",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ssddi456/reverse_toolsets.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ssddi456/reverse_toolsets/issues"
+  },
+  "homepage": "https://github.com/ssddi456/reverse_toolsets#readme",
+  "nodemonConfig": {
+    "ignore": [
+      "test/*",
+      "docs/*",
+      "node_modules/*"
+    ],
+    "execMap": {
+      "ts": "ts-node -T",
+      "watch": [
+        "bin/*",
+        "lib/*"
+      ]
+    },
+    "delay": 1000
+  },
+  "dependencies": {
+    "commander": "^8.3.0",
+    "fs-extra": "^10.0.0",
+    "lebab": "^3.1.1",
+    "ts-node": "^10.4.0",
+    "typescript": "^4.4.4"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^9.0.13",
+    "@types/node": "^16.11.6"
+  }
+}
