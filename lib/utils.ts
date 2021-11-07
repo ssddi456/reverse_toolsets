@@ -1,5 +1,7 @@
 
 import * as ts from "typescript";
+import * as fs from "fs";
+import { createSourceFile } from "./compiler";
 import { VisitResult } from "typescript";
 
 export function findNeareastParentWithType(
@@ -185,4 +187,24 @@ export const findNodeWithTreeType = makeFindNodeWithTreeType();
 
 export function logSyntaxKind(node: ts.Node) {
     return ts.SyntaxKind[node.kind];
+}
+
+
+export async function doCompile(source: string) {
+    return new Promise<ReturnType<typeof createSourceFile>>(resolve => {
+
+        fs.readFile(source, 'utf8', (err, data) => {
+            if (err) {
+                throw err;
+            }
+
+            resolve(createSourceFile({
+                ...ts,
+                tsAstViewer: {
+                    packageName: ts.version,
+                    cachedSourceFiles: {},
+                }
+            }, data, ts.ScriptTarget.ES2015, ts.ScriptKind.JS));
+        })
+    });
 }

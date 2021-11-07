@@ -13,6 +13,8 @@
         "experimentalDecorators": true,
         "emitDecoratorMetadata": true,
         "noImplicitAny": true,
-
+        "sourceMap": true,
+        "importHelpers": true,
+        "allowJs": true,
     }
 }

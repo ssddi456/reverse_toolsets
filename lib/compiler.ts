@@ -2,7 +2,7 @@ import { CompilerApi, CompilerHost, CompilerOptions, Program, ScriptKind, Script
 
 export function createSourceFile(api: CompilerApi, code: string, scriptTarget: ScriptTarget, scriptKind: ScriptKind) {
     const filePath = `/ts-ast-viewer.js`;
-    const sourceFile = api.createSourceFile(filePath, code, scriptTarget, false, scriptKind);
+    const sourceFile = api.createSourceFile(filePath, code, scriptTarget, true, scriptKind);
     let bindingResult: { typeChecker: TypeChecker; program: Program } | undefined;
 
     return { sourceFile, bindingTools: getBindingTools };
