@@ -5,6 +5,7 @@ import lebab_module from '../lib/lebab_module';
 import lebab_rollup_module from '../lib/lebab_rollup_module';
 import optimize_decompile from '../lib/optimize_decompile';
 import optimize_rollup_decompile from '../lib/optimize_rollup_decompile';
+import repack_rollup_module from '../lib/repack_rollup_module';
 
 const program = new commander.Command();
 program.command('extract_modules [appName]')
@@ -30,6 +31,10 @@ program.command('optimize_decompile [appName]')
 program.command('optimize_rollup_decompile [appName]')
     .action((appName) => {
         optimize_rollup_decompile(appName)
+    });
+program.command('repack_rollup_module [appName]')
+    .action((appName) => {
+        repack_rollup_module(appName)
     });
 program.command('all [appName]')
     .action(async (appName) => {

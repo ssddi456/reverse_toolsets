@@ -1,10 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import { distRoot, } from "./consts";
-import { Project, ts } from "ts-morph";
-import { transform } from 'lebab';
+import { Project } from "ts-morph";
 import { InMemoryFileSystemHost } from '@ts-morph/common';
-import lebab_module, { FileInfo, lebabTypes, transformFile } from './lebab_module';
+import lebab_module, { FileInfo, transformFile } from './lebab_module';
 
 // ts-node -T bin\dewebpack.ts lebab_rollup_module index.min.js > log
 export default async function lebab_rollup_module(appName: string): Promise<void> {
