@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { distRoot, } from "./consts";
-import { Project, ts } from "ts-morph";
+import { FunctionDeclaration, Node, Project, SourceFile, SyntaxKind, ts } from "ts-morph";
 import { transform } from 'lebab';
 
 import { InMemoryFileSystemHost } from '@ts-morph/common';
@@ -11,7 +11,7 @@ export interface FileInfo {
     ifNumber: string;
     lebabName: string;
 }
-const lebabTypes = {
+export const lebabTypes = {
     'class': 1,
     'template': 1,
     'arrow': 1,
@@ -32,16 +32,17 @@ const lebabTypes = {
     'includes': 1,
 };
 
-export default async function lebab_module(): Promise<void> {
+export default async function lebab_module(appName: string): Promise<void> {
+    const distSubDir = path.join(distRoot, appName);
     const ifs = new InMemoryFileSystemHost();
     function loadAllFiles() {
         const names: FileInfo[] = [];
-        fs.readdirSync(distRoot).forEach(file => {
+        fs.readdirSync(distSubDir).forEach(file => {
             const ifNumber = file.match(/^(\d+)\.js$/)?.[1];
             if (ifNumber) {
                 const tsName = `/${ifNumber}.ts`;
-                ifs.writeFileSync(tsName, fs.readFileSync(path.join(distRoot, file), 'utf-8'));
-                names.push({ tsName, ifNumber, lebabName: path.join(distRoot, `${ifNumber}_lebab.js`) });
+                ifs.writeFileSync(tsName, fs.readFileSync(path.join(distSubDir, file), 'utf-8'));
+                names.push({ tsName, ifNumber, lebabName: path.join(distSubDir, `${ifNumber}_lebab.js`) });
             }
         });
         return names;
@@ -54,38 +55,58 @@ export default async function lebab_module(): Promise<void> {
     });
     project.resolveSourceFileDependencies();
 
-    function transformFile({ tsName, lebabName }: FileInfo) {
+
+    fileInfos.forEach(fileInfo => {
+        const { tsName, lebabName } = fileInfo;
         const sourceFile = project.addSourceFileAtPath(tsName);
         if (!sourceFile) {
             throw new Error('source file not found');
         }
-
-        const moduleFunction = sourceFile.getFirstDescendantByKind(ts.SyntaxKind.FunctionDeclaration)!;
-        const allParams = moduleFunction.getParameters();
-
-        const firstParams = allParams[0];
-        const secondParams = allParams[1];
-        const thirdParams = allParams[2];
-
-        if (firstParams) {
-            firstParams.rename('module');
+        try {
+            const lebabedCode = transformFile(sourceFile);
+            fs.writeFileSync(lebabName, lebabedCode);
+        } catch (error) {
+            if (error) {
+                console.error(fileInfo, error);
+            }
         }
-        if (secondParams) {
-            secondParams.rename('exports');
-        }
-        if (thirdParams) {
-            thirdParams.rename('require');
-        }
-        const modifiedCode = moduleFunction.getBodyText()!;
-        const { code: lebabedCode, warnings } = transform(modifiedCode, Object.keys(lebabTypes));
-
-        fs.writeFileSync(lebabName, lebabedCode);
-    }
-
-    fileInfos.forEach(fileInfo => transformFile(fileInfo));
-
+    });
 }
 
-if (require.main === module) {
-    lebab_module();
+export function transformFile(sourceFile: SourceFile) {
+
+    const moduleFunction = (() => {
+
+        const firstChild = sourceFile.getFirstDescendantByKindOrThrow(SyntaxKind.ExpressionStatement)
+            .getFirstChild();
+        if (!firstChild) {
+            throw new Error('module function not found');
+        }
+        if (Node.isArrowFunction(firstChild)
+            || Node.isFunctionDeclaration(firstChild)
+        ) {
+            return firstChild;
+        }
+    })();
+    if (!moduleFunction) {
+        throw new Error('module function not found');
+    }
+    const allParams = moduleFunction.getParameters();
+
+    const firstParams = allParams[0];
+    const secondParams = allParams[1];
+    const thirdParams = allParams[2];
+
+    if (firstParams) {
+        firstParams.rename('module');
+    }
+    if (secondParams) {
+        secondParams.rename('exports');
+    }
+    if (thirdParams) {
+        thirdParams.rename('__require__');
+    }
+    const modifiedCode = moduleFunction.getBodyText()!;
+    const { code, warnings } = transform(modifiedCode, Object.keys(lebabTypes));
+    return code;
 }

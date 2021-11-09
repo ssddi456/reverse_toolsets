@@ -4,12 +4,12 @@ import * as path from 'path';
 import { doCompile, findNodeWithTreeTypeChildren, } from './utils';
 import { source, distRoot } from './consts';
 
-export default async function () {
+export default async function (appName: string) {
 
+    const { sourceFile } = await doCompile(path.join(source, appName));
+    const distSubRoot = path.join(distRoot, appName);
+    fs.ensureDirSync(distSubRoot);
 
-    const { bindingTools, sourceFile } = await doCompile(source);
-
-    const { typeChecker } = bindingTools();
     const printer = ts.createPrinter({});
 
     const nodes = findNodeWithTreeTypeChildren<ts.CallExpression>(sourceFile, [
@@ -53,7 +53,7 @@ export default async function () {
 
         const code = printer.printNode(ts.EmitHint.Unspecified, element, sourceFile);
 
-        fs.writeFile(path.join(distRoot, i + '.js'), code);
+        fs.writeFile(path.join(distSubRoot, i + '.js'), code);
     });
 
 }

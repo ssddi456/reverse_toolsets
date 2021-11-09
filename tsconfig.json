@@ -16,5 +16,9 @@
         "sourceMap": true,
         "importHelpers": true,
         "allowJs": true,
-    }
+        "outDir": "./compile"
+    },
+    "exclude": [
+        "./dist/*", "./repack/*"
+    ]
 }
