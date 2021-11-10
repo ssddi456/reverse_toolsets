@@ -21,14 +21,14 @@ export default async function (appName: string) {
     });
     const sourceFile = project.addSourceFileAtPath(tsName)!;
 
-    const nodes = sourceFile.getFirstDescendantByKind(SyntaxKind.ExpressionStatement)!
+    const block = sourceFile.getFirstDescendantByKind(SyntaxKind.ExpressionStatement)!
         .getFirstChildByKind(SyntaxKind.CallExpression)!
         .getFirstChildByKind(SyntaxKind.ParenthesizedExpression)!
         .getFirstChildByKind(SyntaxKind.ArrowFunction)!
-        .getFirstChildByKind(SyntaxKind.Block)!
-        .getStatements();
+        .getFirstChildByKindOrThrow(SyntaxKind.Block);
 
-
+    const nodes = block.getStatements();
+    let restNodes: Node[] = [];
     nodes.forEach((element, i) => {
         const kind = element.getKind();
         const kindName = element.getKindName();
@@ -39,12 +39,19 @@ export default async function (appName: string) {
             }
         }
         if (i == 1 && kind == SyntaxKind.VariableStatement) {
-            const varNode = element.getFirstChildByKindOrThrow(SyntaxKind.VariableDeclarationList)
-                .getFirstChildByKindOrThrow(SyntaxKind.VariableDeclaration);
+            const varList = element.getFirstChildByKindOrThrow(SyntaxKind.VariableDeclarationList)
+                .getChildrenOfKind(SyntaxKind.VariableDeclaration);
+
+            varList.slice(1).forEach(element => {
+                restNodes.push(element);
+            });
+
+            const varNode = varList[0];
             const varName = varNode
                 .getNameNode()
                 .getText();
-            console.log(varName);
+
+            console.log('varName', varName);
 
             const varProps = varNode.getInitializerIfKindOrThrow(SyntaxKind.ObjectLiteralExpression)!
                 .getProperties();
@@ -64,6 +71,10 @@ export default async function (appName: string) {
 
     const main = fs.createWriteStream(path.join(distSubRoot, 'index.js'));
     main.write('() => {\n');
+    restNodes.forEach((element, i) => {
+        main.write('var ' + element.getText());
+        main.write('\n');
+    });
     nodes.slice(2).forEach(element => {
         main.write(element.getText());
         main.write('\n');

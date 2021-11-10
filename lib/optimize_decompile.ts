@@ -1,11 +1,11 @@
-import * as fs from "fs";
+import * as fs from "fs-extra";
 import * as path from "path";
 import { distRoot, } from "./consts";
-import * as uniq from 'lodash/uniq';
 import { Block, CodeBlockWriter, ExpressionStatement, Node, Project, SourceFile, Statement, StatementedNode } from "ts-morph";
 
 import { InMemoryFileSystemHost, SyntaxKind } from '@ts-morph/common';
 import * as prettier from 'prettier';
+import { visitAllNodes } from './project_utils';
 
 export function expandCommaExpression(writer: CodeBlockWriter, node: Node) {
     const nodes = [];
@@ -31,10 +31,10 @@ export interface FileInfo {
     extData?: any;
 }
 export default async function optimizeDecompile(appName: string) {
+    const distSubDir = path.join(distRoot, appName);
     const ifs = new InMemoryFileSystemHost();
     function loadAllFiles() {
         const names: FileInfo[] = [];
-        const distSubDir = path.join(distRoot, appName);
         fs.readdirSync(distSubDir).forEach(file => {
             const ifNumber = file.match(/^(\d+)_lebab\.js$/)?.[1];
             if (ifNumber) {
@@ -60,7 +60,6 @@ export default async function optimizeDecompile(appName: string) {
             throw new Error('source file not found');
         }
         const modifiedCode = optimizeDecompileSourceFile(sourceFile);
-        fileInfo.extData = extractModuleInfo(sourceFile);
 
         fs.writeFileSync(decompileName, modifiedCode);
     }
@@ -158,82 +157,3 @@ export function optimizeDecompileSourceFile(sourceFile: SourceFile) {
     }
 }
 
-export function visitAllNodes(root: Node, callback?: (node: Node) => Node | undefined) {
-    try {
-        root.forEachChild((node) => {
-            // console.log('node.getKindName', node.getKindName());
-            // if (node.getKindName() === 'VariableDeclaration') {
-            //     console.log(node.getText());
-            // }
-            if (callback) {
-                const nextNode = callback(node);
-                if (nextNode) {
-                    visitAllNodes(nextNode, callback);
-                }
-            } else {
-
-                visitAllNodes(node, callback);
-            }
-
-        });
-    } catch (error) {
-        console.log(error);
-    }
-}
-
-export function extractModuleInfo(sourceFile: SourceFile) {
-    const fileName = sourceFile.getSourceFile().getFilePath();
-
-    // 分析require call 和 exports assignment
-    const info = {
-        imports: [] as string[],
-        exports: [] as string[],
-        callAccess: [] as string[],
-    };
-    visitAllNodes(sourceFile, (node) => {
-        if (Node.isCallExpression(node)) {
-            const callee = node.getExpression();
-            if (Node.isIdentifier(callee)) {
-                if (
-                    callee.getText() === 'require'
-                    || callee.getText() === '__require__'
-                ) {
-                    const args = node.getArguments();
-                    if (args.length === 1) {
-                        const arg = args[0];
-                        info.imports.push(arg.getText());
-                    }
-                }
-            } else if (Node.isParenthesizedExpression(callee)) {
-                const innerCallee = callee.getExpression();
-                if (Node.isBinaryExpression(innerCallee)
-                    && innerCallee.getOperatorToken().getText() === ','
-                    && Node.isNumericLiteral(innerCallee.getLeft())
-                ) {
-                    const j = innerCallee.getRight();
-                    info.callAccess.push(j.getText());
-                }
-            }
-        } else if (Node.isBinaryExpression(node)) {
-            if (node.getOperatorToken().getText() === '=') {
-                const left = node.getLeft();
-                if (Node.isPropertyAccessExpression(left)) {
-                    if (left.getExpression().getText() === 'exports') {
-                        const right = left.getName();
-                        right && info.exports.push(right);
-                    }
-                }
-            }
-        } else if (Node.isExportAssignment(node)) {
-
-        }
-
-        return node;
-    });
-
-    info.imports = uniq(info.imports);
-    info.exports = uniq(info.exports);
-    info.callAccess = uniq(info.callAccess);
-
-    return info;
-}

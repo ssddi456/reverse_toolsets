@@ -4,7 +4,7 @@ import { distRoot, } from "./consts";
 import { Project } from "ts-morph";
 
 import { InMemoryFileSystemHost } from '@ts-morph/common';
-import { default as optimizeDecompileCore, extractModuleInfo, FileInfo, optimizeDecompileSourceFile } from './optimize_decompile';
+import { default as optimizeDecompileCore, FileInfo, optimizeDecompileSourceFile } from './optimize_decompile';
 
 // ts-node -T bin\dewebpack.ts optimize_rollup_decompile index.min.js > log
 export default async function optimizeDecompile(appName: string) {
@@ -26,23 +26,8 @@ export default async function optimizeDecompile(appName: string) {
 
     const sourceFile = project.addSourceFileAtPath(indexInfo.tsName)!;
     const code = optimizeDecompileSourceFile(sourceFile);
-    indexInfo.extData = extractModuleInfo(sourceFile);
-    fileInfos.push(indexInfo);
 
     fs.writeFileSync(indexInfo.decompileName, code);
-    const pluginInfos: (FileInfo & { pluginName: string })[] = [];
-    fileInfos.forEach(element => {
-        if (element.extData.callAccess.some((x: string) => x.indexOf('registerEditorPlugin') != -1)) {
-            const pluginName = element.extData.exports.find((x: string) => x.indexOf('Plugin') != -1);
-            if (pluginName) {
-                pluginInfos.push({
-                    ...element,
-                    pluginName: pluginName,
-                });
-            }
-        }
-    });
-    fs.writeJSONSync(path.join(distSubDir, 'fileInfos.json'), { fileInfos, pluginInfos }, {
-        spaces: 2
-    });
+
+
 }

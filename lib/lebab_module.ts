@@ -73,7 +73,7 @@ export default async function lebab_module(appName: string): Promise<void> {
     });
 }
 
-export function transformFile(sourceFile: SourceFile) {
+export function transformFile(sourceFile: SourceFile, { noLebab = false } = {}) {
 
     const moduleFunction = (() => {
 
@@ -107,6 +107,9 @@ export function transformFile(sourceFile: SourceFile) {
         thirdParams.rename('__require__');
     }
     const modifiedCode = moduleFunction.getBodyText()!;
+    if (noLebab) {
+        return modifiedCode;
+    }
     const { code, warnings } = transform(modifiedCode, Object.keys(lebabTypes));
     return code;
 }

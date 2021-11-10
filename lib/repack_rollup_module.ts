@@ -1,45 +1,42 @@
 import * as fs from "fs-extra";
 import * as path from "path";
 import * as ts from "typescript";
-import { InMemoryFileSystemHost, Project, ExpressionStatement, printNode } from 'ts-morph';
+import { InMemoryFileSystemHost, printNode } from 'ts-morph';
 import { distRoot, repackRoot, } from "./consts";
+import * as prettier from 'prettier';
 
-
-export interface FileInfo {
-    tsName: string;
-    ifNumber: string;
-    decompileName: string;
-}
 // ts-node -T bin\dewebpack.ts repack_rollup_module index.min.js > log
 export default async function repack_rollup_module(appName: string) {
     const ifs = new InMemoryFileSystemHost();
 
     fs.ensureDirSync(repackRoot,);
     function loadAllFiles() {
-        const names: FileInfo[] = [];
+        const names: { tsName: string, ifNumber: string }[] = [];
         const distSubDir = path.join(distRoot, appName);
         fs.readdirSync(distSubDir).forEach(file => {
             const ifNumber = file.match(/^(\d+)\.js$/)?.[1];
             if (ifNumber) {
                 const tsName = `/${ifNumber}.ts`;
                 ifs.writeFileSync(tsName, fs.readFileSync(path.join(distSubDir, file), 'utf-8'));
-                names.push({ tsName, ifNumber, decompileName: path.join(distSubDir, `${ifNumber}_decompile.js`) });
+                names.push({ tsName, ifNumber });
             }
         });
         return names;
     }
 
     const names = loadAllFiles();
-    const project = new Project({
-        fileSystem: ifs,
-    });
+
     const factory = ts.factory;
-    const properties = names.map(({ ifNumber, tsName }) => {
-        const sourceFile = project.addSourceFileAtPath(tsName);
-        const body = (sourceFile.getStatements()[0] as ExpressionStatement).getExpression().compilerNode;
+    const properties = names.map(({ ifNumber }) => {
         return factory.createPropertyAssignment(
             factory.createNumericLiteral(ifNumber),
-            body as any /* 还不如直接拼字符串 */
+            factory.createCallExpression(
+                factory.createIdentifier('ModulePlaceHolder'),
+                undefined,
+                factory.createNodeArray([
+                    factory.createStringLiteral(ifNumber),
+                ])
+            ),
         );
     });
     const node = factory.createCallExpression(
@@ -50,21 +47,36 @@ export default async function repack_rollup_module(appName: string) {
             undefined,
             factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken),
             factory.createBlock(
-                [factory.createVariableStatement(
-                    undefined,
-                    factory.createVariableDeclarationList(
-                        [factory.createVariableDeclaration(
-                            factory.createIdentifier("t"),
+                [
+                    factory.createVariableStatement(
+                        undefined,
+                        factory.createVariableDeclarationList(
+                            [factory.createVariableDeclaration(
+                                factory.createIdentifier("e"),
+                                undefined,
+                                undefined,
+                                factory.createObjectLiteralExpression(
+                                    properties,
+                                    false
+                                )
+                            )],
+                            ts.NodeFlags.None
+                        )
+                    ),
+                    factory.createReturnStatement(
+                        factory.createCallExpression(
+                            factory.createParenthesizedExpression(
+                                factory.createBinaryExpression(
+                                    factory.createNumericLiteral(0),
+                                    ts.SyntaxKind.CommaToken,
+                                    factory.createIdentifier("indexContentPlaceHolder")
+                                )
+                            ),
                             undefined,
-                            undefined,
-                            factory.createObjectLiteralExpression(
-                                properties,
-                                false
-                            )
-                        )],
-                        ts.NodeFlags.None
+                            []
+                        )
                     )
-                )],
+                ],
                 true
             )
         )),
@@ -75,6 +87,27 @@ export default async function repack_rollup_module(appName: string) {
     //
     // packfiles
 
+    const packedCode = prettier.format(printNode(node), {
+        parser: 'typescript',
+        trailingComma: 'all'
+    });
+
+    const replacedCode = packedCode.split('\n').map((line, index) => {
+        return line
+            .replace(/ModulePlaceHolder\("(\d+)"\)/, function ($, $1) {
+                const tsName = names.find(({ ifNumber }) => ifNumber === $1)?.tsName;
+                if (tsName) {
+                    return ifs.readFileSync(tsName);
+                }
+                return $;
+            })
+            .replace('indexContentPlaceHolder', function () {
+                return fs.readFileSync(path.join(distRoot, appName, 'index_modified.js'), 'utf-8');
+            });
+    }).join('\n');
     // write
-    fs.writeFileSync(path.join(repackRoot, appName), printNode(node));
+    fs.writeFileSync(
+        path.join(repackRoot, appName),
+        replacedCode
+    );
 }
