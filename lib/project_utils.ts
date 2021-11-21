@@ -6,37 +6,40 @@ import { InMemoryFileSystemHost } from '@ts-morph/common';
 
 
 export interface FileInfo {
+    /** /1.ts */
     tsName: string;
+    /** 1 */
     ifNumber: string;
+    /** 1.js */
     originName: string;
+    /** 1_lebab.js */
     lebabName: string;
+    /** 1_decompile.jsx */
     decompileName: string;
+    /** 1_modified.js */
     modifiedName: string;
 }
 
 export function packageLoader(
     appName: string,
-    { loadByName = 'originName' } = {} as { loadByName: keyof FileInfo }
+    {
+        loadByName = 'originName',
+        loadAsJsx = false,
+        writeAsJsx = false,
+    } = {} as { loadByName: keyof FileInfo, loadAsJsx?: boolean, writeAsJsx?: boolean }
 ) {
     const distSubDir = path.join(distRoot, appName);
     const ifs = new InMemoryFileSystemHost();
+    const surfix = loadAsJsx ? 'x' : '';
+    const outSurfix = writeAsJsx ? 'x' : '';
 
     function loadAllFiles() {
         const names: FileInfo[] = [];
         fs.readdirSync(distSubDir).forEach(file => {
             const ifNumber = file.match(/^(\d+)\.js$/)?.[1];
             if (ifNumber) {
-                const tsName = `/${ifNumber}.ts`;
-                const fileInfo: FileInfo = {
-                    tsName,
-                    ifNumber,
-                    originName: path.join(distSubDir, file),
-                    lebabName: path.join(distSubDir, `${ifNumber}_lebab.js`),
-                    decompileName: path.join(distSubDir, `${ifNumber}_decompile.js`),
-                    modifiedName: path.join(distSubDir, `${ifNumber}_modified.js`),
-                };
-                ifs.writeFileSync(tsName, fs.readFileSync(fileInfo[loadByName], 'utf-8'));
-                names.push(fileInfo);
+                const info = loadFile(ifNumber);
+                names.push(info);
             }
         });
         return names;
@@ -51,8 +54,15 @@ export function packageLoader(
             decompileName: path.join(distSubDir, `${fileBaseName}_decompile.js`),
             modifiedName: path.join(distSubDir, `${fileBaseName}_modified.js`),
         };
-        ifs.writeFileSync(indexInfo.tsName, fs.readFileSync(indexInfo[loadByName], 'utf8'));
-        return indexInfo;
+        const outputFileInfo = {} as FileInfo;
+
+        for (const key in indexInfo) {
+            const element = indexInfo[key as keyof FileInfo];
+            outputFileInfo[key as keyof FileInfo] = element + (key == 'ifNumber' ? '' : outSurfix);
+        }
+
+        ifs.writeFileSync(indexInfo.tsName + surfix, fs.readFileSync(indexInfo[loadByName] + surfix, 'utf-8'));
+        return outputFileInfo;
     }
 
     return {
