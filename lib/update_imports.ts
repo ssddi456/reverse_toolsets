@@ -3,7 +3,7 @@ import * as path from "path";
 import * as prettier from "prettier";
 import { Node, NumericLiteral } from "ts-morph";
 import { packageLoader, visitAllNodes } from './project_utils';
-import { isReactCreateElement, transformCreateElementToJsx } from "./utils";
+import { transformReactCreateElementToJsx, transformSpreadAssignmentCall } from "./utils";
 import * as ts from 'typescript';
 
 // ts-node -T bin\dewebpack.ts update_imports index.min.js > log
@@ -37,19 +37,10 @@ export default async function updateImports(appName: string) {
         });
 
 
-        const transformed = ts.transform(sourceFile.compilerNode, [function (context) {
-            function transformer(node: ts.Node) {
-                const transformedNode: ts.Node = ts.visitEachChild(node, transformer, context);
-
-                if (isReactCreateElement(transformedNode)) {
-                    return transformCreateElementToJsx(transformedNode);
-                }
-
-                return transformedNode;
-            }
-
-            return transformer;
-        }]);
+        const transformed = ts.transform(sourceFile.compilerNode, [
+            transformSpreadAssignmentCall,
+            transformReactCreateElementToJsx
+        ]);
         const printer = ts.createPrinter();
 
         fs.writeFileSync(decompileName,

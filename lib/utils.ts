@@ -3,6 +3,7 @@ import * as ts from "typescript";
 import * as fs from "fs";
 import { createSourceFile } from "./compiler";
 import { VisitResult } from "typescript";
+import { Node } from "./CompilerApi";
 
 export function findNeareastParentWithType(
     target: ts.Node,
@@ -210,6 +211,22 @@ export async function doCompile(source: string) {
 }
 
 
+export function isParenthesizedCallExpression(name: string, node: ts.Node): node is ts.CallExpression {
+    if (ts.isCallExpression(node)) {
+        const expression = node.expression;
+        if (ts.isParenthesizedExpression(expression)
+            && ts.isBinaryExpression(expression.expression)
+            && expression.expression.operatorToken.kind === ts.SyntaxKind.CommaToken
+            && ts.isPropertyAccessExpression(expression.expression.right)
+            && expression.expression.right.name.getText() === name
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
 export function isReactCreateElement(node: ts.Node): node is ts.CallExpression {
     if (ts.isCallExpression(node)) {
         const expression = node.expression;
@@ -311,8 +328,175 @@ export function transformCreateElementToJsx(node: ts.CallExpression) {
     return jsx;
 }
 
+export function transformReactCreateElementToJsx(context: ts.TransformationContext): ts.Transformer<ts.SourceFile> {
+    function transformer(node: ts.Node) {
+        const transformedNode: ts.Node = ts.visitEachChild(node, transformer, context);
+
+        if (isReactCreateElement(transformedNode)) {
+            return transformCreateElementToJsx(transformedNode);
+        }
+
+        return transformedNode;
+    }
+
+    return (transformer as unknown) as ts.Transformer<ts.SourceFile>;
+}
+
+
+export function isSpreadAssignmentCall(node: ts.Node): node is ts.CallExpression {
+    return isParenthesizedCallExpression('__assign', node);
+}
+
+export function transformSpreadAssignmentCallToSpreadAssignment(node: ts.CallExpression) {
+    const factory = ts.factory;
+    const container = node.arguments[0];
+    const rest = node.arguments.slice(1);
+
+    const properties = (() => {
+
+        const properties = ts.isObjectLiteralExpression(container)
+            ? [...container.properties]
+            : [factory.createSpreadAssignment(container)];
+
+        rest.forEach(x => {
+            if (ts.isObjectLiteralExpression(x)) {
+                properties.push(...x.properties);
+            } else {
+                properties.push(factory.createSpreadAssignment(x));
+            }
+        });
+
+        return properties;
+    })();
+
+    return factory.createObjectLiteralExpression(properties);
+}
+
+export function transformSpreadAssignmentCall(context: ts.TransformationContext) {
+    function transformer(node: ts.Node) {
+        const transformedNode: ts.Node = ts.visitEachChild(node, transformer, context);
+
+        if (isSpreadAssignmentCall(transformedNode)) {
+            return transformSpreadAssignmentCallToSpreadAssignment(transformedNode);
+        }
+
+        return transformedNode;
+    }
+
+    return (transformer as unknown) as ts.Transformer<ts.SourceFile>;
+}
+
+
+export function isClasses(node: ts.Node): node is ts.VariableStatement {
+    if (ts.isVariableStatement(node)
+        && node.declarationList.declarations.length === 1
+        && node.declarationList.declarations[0].initializer
+        && ts.isCallExpression(node.declarationList.declarations[0].initializer)
+        && ts.isParenthesizedExpression(node.declarationList.declarations[0].initializer.expression)
+        && ts.isArrowFunction(node.declarationList.declarations[0].initializer.expression.expression)
+    ) {
+        const arrow = node.declarationList.declarations[0].initializer.expression.expression;
+        const body = arrow.body;
+        if (ts.isBlock(body)
+            && ts.isFunctionDeclaration(body.statements[0])
+            && ts.isExpressionStatement(body.statements[1])
+            && isParenthesizedCallExpression('__extends', body.statements[1].expression)
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+export function transformClassesToClassExpression(node: ts.VariableStatement) {
+    const factory = ts.factory;
+    const extendsClasses = (() => {
+        if ((node?.declarationList?.declarations?.[0]?.initializer as ts.CallExpression)?.arguments?.[0]) {
+            return [factory.createHeritageClause(
+                ts.SyntaxKind.ExtendsKeyword,
+                [factory.createExpressionWithTypeArguments(
+                    (node!.declarationList!.declarations![0]!.initializer as ts.CallExpression)!.arguments![0],
+                    undefined
+                )]
+            )];
+        }
+    })();
+    const body = (((node!.declarationList!.declarations![0]!
+        .initializer as ts.CallExpression)!
+        .expression as ts.ParenthesizedExpression)!
+        .expression as ts.ArrowFunction)!
+        .body as ts.Block;
+    const constructor = (() => {
+        return factory.createConstructorDeclaration(
+            undefined,
+            undefined,
+            (body.statements[0] as ts.FunctionDeclaration).parameters,
+            (body.statements[0] as ts.FunctionDeclaration).body
+        );
+    })();
+    const methods = (() => {
+        return body.statements.slice(2).map((x) => {
+            if (ts.isExpressionStatement(x)
+                && ts.isBinaryExpression(x.expression)
+            ) {
+                const name = x.expression.left as ts.PropertyAccessExpression;
+                const body = x.expression.right as ts.FunctionExpression;
+
+                return factory.createMethodDeclaration(
+                    undefined,
+                    undefined,
+                    undefined,
+                    name.name,
+                    undefined,
+                    undefined,
+                    body.parameters,
+                    undefined,
+                    body.body
+                );
+            } else {
+                console.log('wtf?', x.getText());
+            }
+        }).filter(Boolean) as ts.MethodDeclaration[];
+    })();
+
+    const classDeclaration = factory.createClassExpression(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        extendsClasses,
+        [constructor, ...methods],
+    );
+    const declaration = node!.declarationList!.declarations![0]!;
+
+    factory.updateVariableDeclaration(
+        declaration,
+        declaration.name,
+        declaration.exclamationToken,
+        declaration.type,
+        classDeclaration
+    );
+
+    return node;
+}
+
+export function transformClasses(context: ts.TransformationContext) {
+    function transformer(node: ts.Node) {
+        const transformedNode: ts.Node = ts.visitEachChild(node, transformer, context);
+
+        if (isClasses(transformedNode)) {
+            return transformClassesToClassExpression(transformedNode);
+        }
+
+        return transformedNode;
+    }
+
+    return (transformer as unknown) as ts.Transformer<ts.SourceFile>;
+}
 
 if (require.main === module) {
+
     const source1 = `
 const someItem = a?o.default.createElement(
     "div",
@@ -382,31 +566,48 @@ o.default.createElement(
     ),
 );
 `;
-    const sourceFile = ts.createSourceFile('test.tsx', source1, ts.ScriptTarget.ES2015, true, ts.ScriptKind.TSX);
 
+    const testTransformer = function (code: string, transformer: ts.TransformerFactory<ts.SourceFile>) {
+        const sourceFile = ts.createSourceFile('test.tsx', code, ts.ScriptTarget.ES2015, true, ts.ScriptKind.TSX);
 
-    const transformed = ts.transform(sourceFile, [function (context) {
-        function transformer(node: ts.Node) {
-            const transformedNode: ts.Node = ts.visitEachChild(node, transformer, context);
+        const transformed = ts.transform(sourceFile, [transformer]);
 
-            if (isReactCreateElement(transformedNode)) {
-                return transformCreateElementToJsx(transformedNode);
-            }
+        const printer = ts.createPrinter();
+        const prettier = require('prettier');
+        console.log(
+            // printer.printFile(sourceNode)
+            prettier.format(printer.printFile(transformed.transformed[0] as ts.SourceFile), {
+                parser: 'typescript',
+                trailingComma: 'all'
+            })
+        );
+    }
 
-            return transformedNode;
-        }
+    // testTransformer(source1, transformReactCreateElementToJsx);
+    const source3 = `
+test = (0, n.__assign)((0, n.__assign)({}, t.scaffold), {
+    format: "YYYY-MM-DD",
+    value: Math.round(Date.now() / 1e3),
+});
+test = (0, n.__assign)(
+    (0, n.__assign)((0, n.__assign)({}, l ? null : r), a),
+    { $$id: t },
+)
+`;
+    // testTransformer(source3, transformSpreadAssignmentCall);
+    const source4 = `
+const d = ((e) => {
+  function t(...args) {
+    return t;
+  }
+  (0, n.__extends)(t, e);
+  t.prototype.afterUpdate = function ({ context }) {
 
-        return transformer;
-    }]);
+  };
+  return t;
+})(i.BasePlugin);
+    `;
 
+    testTransformer(source4, transformClasses);
 
-    const printer = ts.createPrinter();
-    const prettier = require('prettier');
-    console.log(
-        // printer.printFile(sourceNode)
-        prettier.format(printer.printFile(transformed.transformed[0] as ts.SourceFile), {
-            parser: 'typescript',
-            trailingComma: 'all'
-        })
-    );
 }
