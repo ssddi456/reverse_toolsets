@@ -428,45 +428,49 @@ export function transformClassesToClassExpression(node: ts.VariableStatement) {
     const classProperties: ts.ExpressionStatement[] = [];
     const members = (() => {
         return body.statements.slice(2).map((x) => {
-            if (ts.isExpressionStatement(x)
-                && ts.isBinaryExpression(x.expression)
-            ) {
-                const name = x.expression.left as ts.PropertyAccessExpression;
-                const body = x.expression.right as ts.FunctionExpression | ts.ArrowFunction;
-                if (!ts.isFunctionExpression(body) && !ts.isArrowFunction(body)) {
-                    classProperties.push(x);
+            if (ts.isExpressionStatement(x)) {
+                if (ts.isBinaryExpression(x.expression)) {
 
-                    if (ts.isIdentifier(name.expression)) {
-                        return factory.createPropertyDeclaration(
-                            undefined,
-                            [
-                                factory.createModifier(ts.SyntaxKind.PublicKeyword),
-                                factory.createModifier(ts.SyntaxKind.StaticKeyword)
-                            ],
-                            name.name,
-                            undefined,
-                            undefined,
-                            body
-                        )
+                    const name = x.expression.left as ts.PropertyAccessExpression;
+                    const body = x.expression.right as ts.FunctionExpression | ts.ArrowFunction;
+                    if (!ts.isFunctionExpression(body) && !ts.isArrowFunction(body)) {
+                        classProperties.push(x);
+
+                        if (ts.isIdentifier(name.expression)) {
+                            return factory.createPropertyDeclaration(
+                                undefined,
+                                [
+                                    factory.createModifier(ts.SyntaxKind.PublicKeyword),
+                                    factory.createModifier(ts.SyntaxKind.StaticKeyword)
+                                ],
+                                name.name,
+                                undefined,
+                                undefined,
+                                body
+                            )
+                        }
+
                     }
-
-                    console.log('wtf?', x.getText());
+                    return factory.createMethodDeclaration(
+                        undefined,
+                        undefined,
+                        undefined,
+                        name.name,
+                        undefined,
+                        undefined,
+                        body.parameters,
+                        undefined,
+                        ts.isBlock(body.body)
+                            ? body.body
+                            : factory.createBlock([
+                                factory.createReturnStatement(body.body)
+                            ])
+                    );
+                } else if (isParenthesizedCallExpression('__decorate', x.expression)){
+                    // do somthings
+                } else {
+                    console.log('wtf?', x.expression.kind, ts.SyntaxKind[x.expression.kind], x.getText(),);
                 }
-                return factory.createMethodDeclaration(
-                    undefined,
-                    undefined,
-                    undefined,
-                    name.name,
-                    undefined,
-                    undefined,
-                    body.parameters,
-                    undefined,
-                    ts.isBlock(body.body)
-                        ? body.body
-                        : factory.createBlock([
-                            factory.createReturnStatement(body.body)
-                        ])
-                );
             } else if (isParenthesizedCallExpression('__decorate', x)) {
                 // 这里补一下原型装饰器
             } else if (ts.isReturnStatement(x)) {
@@ -477,7 +481,7 @@ export function transformClassesToClassExpression(node: ts.VariableStatement) {
                     // 类装饰器
                 }
             } else {
-                console.log('wtf?', x.getText());
+                console.log('wtf?', x.kind, ts.SyntaxKind[x.kind], x.getText());
             }
         }).filter(Boolean) as ts.MethodDeclaration[];
     })();
@@ -620,7 +624,7 @@ const d = ((e) => {
     return t;
   }
   (0, n.__extends)(t, e);
-  t.prototype.afterUpdate = function ({ context }) {
+  t.prototype.updateDropRegion = function ({ context }) {
 
   };
   t.prototype.buildMockData = () => ({
@@ -632,7 +636,19 @@ const d = ((e) => {
   });
   t.defaultProps = {
   };
-  return t;
+
+  (0, n.__decorate)(
+    [
+      i.autobind,
+      (0, n.__metadata)("design:type", Function),
+      (0, n.__metadata)("design:paramtypes", [Object, Object]),
+      (0, n.__metadata)("design:returntype", void 0),
+    ],
+    e.prototype,
+    "updateDropRegion",
+    null,
+  );
+  return (0, n.__decorate)([l.observer], t)
 })(i.BasePlugin);
     `;
 
