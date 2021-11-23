@@ -211,7 +211,7 @@ export async function doCompile(source: string) {
 }
 
 
-export function isParenthesizedCallExpression(name: string, node: ts.Node): node is ts.CallExpression {
+export function isParenthesizedNamedCallExpression(name: string, node: ts.Node): node is ts.CallExpression {
     if (ts.isCallExpression(node)) {
         const expression = node.expression;
         if (ts.isParenthesizedExpression(expression)
@@ -219,6 +219,21 @@ export function isParenthesizedCallExpression(name: string, node: ts.Node): node
             && expression.expression.operatorToken.kind === ts.SyntaxKind.CommaToken
             && ts.isPropertyAccessExpression(expression.expression.right)
             && expression.expression.right.name.getText() === name
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+export function isParenthesizedAnyCallExpression(node: ts.Node): node is ts.CallExpression {
+    if (ts.isCallExpression(node)) {
+        const expression = node.expression;
+        if (ts.isParenthesizedExpression(expression)
+            && ts.isBinaryExpression(expression.expression)
+            && expression.expression.operatorToken.kind === ts.SyntaxKind.CommaToken
+            && ts.isPropertyAccessExpression(expression.expression.right)
         ) {
             return true;
         }
@@ -346,7 +361,7 @@ export function makeTransformerFactory<T extends ts.Node, F extends ts.Node>(tes
 export const transformReactCreateElementToJsx = makeTransformerFactory(isReactCreateElement, transformCreateElementToJsx);
 
 export function isSpreadAssignmentCall(node: ts.Node): node is ts.CallExpression {
-    return isParenthesizedCallExpression('__assign', node);
+    return isParenthesizedNamedCallExpression('__assign', node);
 }
 
 export function transformSpreadAssignmentCallToSpreadAssignment(node: ts.CallExpression) {
@@ -390,7 +405,7 @@ export function isClasses(node: ts.Node): node is ts.VariableStatement {
         if (ts.isBlock(body)
             && ts.isFunctionDeclaration(body.statements[0])
             && ts.isExpressionStatement(body.statements[1])
-            && isParenthesizedCallExpression('__extends', body.statements[1].expression)
+            && isParenthesizedNamedCallExpression('__extends', body.statements[1].expression)
         ) {
             return true;
         }
@@ -401,12 +416,16 @@ export function isClasses(node: ts.Node): node is ts.VariableStatement {
 
 export function transformClassesToClassExpression(node: ts.VariableStatement) {
     const factory = ts.factory;
+    console.assert(node!.declarationList!.declarations.length === 1);
+
+    const declaration = node!.declarationList!.declarations![0]!;
+
     const extendsClasses = (() => {
-        if ((node?.declarationList?.declarations?.[0]?.initializer as ts.CallExpression)?.arguments?.[0]) {
+        if ((declaration.initializer as ts.CallExpression)?.arguments?.[0]) {
             return [factory.createHeritageClause(
                 ts.SyntaxKind.ExtendsKeyword,
                 [factory.createExpressionWithTypeArguments(
-                    (node!.declarationList!.declarations![0]!.initializer as ts.CallExpression)!.arguments![0],
+                    (declaration.initializer as ts.CallExpression)!.arguments![0],
                     undefined
                 )]
             )];
@@ -417,6 +436,8 @@ export function transformClassesToClassExpression(node: ts.VariableStatement) {
         .expression as ts.ParenthesizedExpression)!
         .expression as ts.ArrowFunction)!
         .body as ts.Block;
+    
+    //TODO: update super(args)
     const constructor = (() => {
         return factory.createConstructorDeclaration(
             undefined,
@@ -425,9 +446,12 @@ export function transformClassesToClassExpression(node: ts.VariableStatement) {
             (body.statements[0] as ts.FunctionDeclaration).body
         );
     })();
+
     const classProperties: ts.ExpressionStatement[] = [];
+    let classDecorator: ts.Decorator[] = [];
     const members = (() => {
-        return body.statements.slice(2).map((x) => {
+        const propertyDecorators: Record<string, ts.Decorator[]> = {};
+        const members = body.statements.slice(2).map((x) => {
             if (ts.isExpressionStatement(x)) {
                 if (ts.isBinaryExpression(x.expression)) {
 
@@ -466,54 +490,107 @@ export function transformClassesToClassExpression(node: ts.VariableStatement) {
                                 factory.createReturnStatement(body.body)
                             ])
                     );
-                } else if (isParenthesizedCallExpression('__decorate', x.expression)){
+                } else if (isParenthesizedNamedCallExpression('__decorate', x.expression)) {
                     // do somthings
-                } else {
-                    console.log('wtf?', x.expression.kind, ts.SyntaxKind[x.expression.kind], x.getText(),);
+                    const expression = x.expression.arguments[0];
+                    if (ts.isArrayLiteralExpression(expression)
+                        && expression.elements.length > 0
+                        && x.expression.arguments.length == 4
+                    ) {
+                        const decoratorCall = expression.elements[0];
+                        const propertyName = x.expression.arguments[2];
+                        console.assert(ts.isStringLiteral(propertyName));
+                        const nameText = (propertyName as ts.StringLiteral).text;
+                        propertyDecorators[nameText] = propertyDecorators[nameText] || [];
+                        propertyDecorators[nameText].push(
+                            factory.createDecorator(
+                                decoratorCall
+                            )
+                        );
+                        return;
+                    }
                 }
-            } else if (isParenthesizedCallExpression('__decorate', x)) {
-                // 这里补一下原型装饰器
             } else if (ts.isReturnStatement(x)) {
                 // 这里补一下类装饰器
-                if (x.expression && ts.isIdentifier(x.expression)) {
-                    // ignore
-                } else {
-                    // 类装饰器
+                if (x.expression) {
+                    if (ts.isIdentifier(x.expression)) {
+                        // ignore return class
+                        return;
+                    } else if (isParenthesizedNamedCallExpression('__decorate', x.expression)) {
+                        // 类装饰器
+                        const expression = x.expression.arguments[0];
+                        if (ts.isArrayLiteralExpression(expression) && expression.elements.length > 0) {
+                            const decoratorCall = expression.elements[0];
+                            classDecorator.push(
+                                factory.createDecorator(
+                                    decoratorCall
+                                )
+                            );
+                            return;
+                        } else {
+                            console.log('wtf?', expression.kind, ts.SyntaxKind[expression.kind], expression.getText(),);
+                        }
+                    }
                 }
-            } else {
-                console.log('wtf?', x.kind, ts.SyntaxKind[x.kind], x.getText());
             }
-        }).filter(Boolean) as ts.MethodDeclaration[];
+
+            console.log('wtf?', x.kind, ts.SyntaxKind[x.kind], x.getText());
+
+        }).filter(Boolean) as (ts.MethodDeclaration | ts.PropertyDeclaration)[];
+
+        return members.map((member) => {
+            const memberName = member.name.getText();
+            const decorator = propertyDecorators[memberName];
+            if (decorator) {
+                if (ts.isMethodDeclaration(member)) {
+                    return factory.updateMethodDeclaration(
+                        member,
+                        decorator,
+                        member.modifiers,
+                        member.asteriskToken,
+                        member.name,
+                        member.questionToken,
+                        member.typeParameters,
+                        member.parameters,
+                        member.type,
+                        member.body
+                    );
+                } else {
+                    return factory.updatePropertyDeclaration(
+                        member,
+                        decorator,
+                        member.modifiers,
+                        member.name,
+                        member.questionToken,
+                        member.type,
+                        member.initializer
+                    );
+                }
+            }
+            return member;
+        });
     })();
 
-    const classDeclaration = factory.createClassExpression(
+    const classDeclaration = factory.createClassDeclaration(
+        classDecorator,
         undefined,
-        undefined,
-        undefined,
+        node?.declarationList?.declarations?.[0]?.name as ts.Identifier,
         undefined,
         extendsClasses,
         [constructor, ...members],
     );
-    const declaration = node!.declarationList!.declarations![0]!;
-    const ret = factory.updateVariableStatement(
-        node,
-        node.modifiers,
-        factory.updateVariableDeclarationList(
-            node.declarationList,
-            [
-                factory.updateVariableDeclaration(
-                    declaration,
-                    declaration.name,
-                    declaration.exclamationToken,
-                    declaration.type,
-                    classDeclaration
-                ),
-                ...node!.declarationList!.declarations.slice(1)
-            ]
-        )
-    );
 
-    return ret;
+
+    return classDeclaration;
+}
+
+export function prettierPrint(node: ts.Node) {
+    const printer = ts.createPrinter();
+    const prettier = require('prettier');
+    return prettier.format(printer.printNode(ts.EmitHint.Unspecified, node, node.getSourceFile()), {
+        parser: 'typescript',
+        trailingComma: 'all'
+    });
 }
 
 export const transformClasses = makeTransformerFactory(isClasses, transformClassesToClassExpression);
@@ -588,12 +665,23 @@ o.default.createElement(
         ),
     ),
 );
+i.default.createElement(
+    o.component,
+    (0, n.__assign)(
+      {},
+      l,
+      null == a ? void 0 : a.state,
+      { $$editor: t },
+      t.wrapperProps,
+      { ref: this.refFn },
+    ),
+);
 `;
 
-    const testTransformer = function (code: string, transformer: ts.TransformerFactory<ts.SourceFile>) {
+    const testTransformer = function (code: string, transformers: ts.TransformerFactory<ts.SourceFile>[]) {
         const sourceFile = ts.createSourceFile('test.tsx', code, ts.ScriptTarget.ES2015, true, ts.ScriptKind.TSX);
 
-        const transformed = ts.transform(sourceFile, [transformer]);
+        const transformed = ts.transform(sourceFile, transformers);
 
         const printer = ts.createPrinter();
         const prettier = require('prettier');
@@ -606,7 +694,7 @@ o.default.createElement(
         );
     }
 
-    // testTransformer(source1, transformReactCreateElementToJsx);
+    testTransformer(source2, [transformReactCreateElementToJsx, transformSpreadAssignmentCall, ]);
     const source3 = `
 test = (0, n.__assign)((0, n.__assign)({}, t.scaffold), {
     format: "YYYY-MM-DD",
@@ -615,9 +703,17 @@ test = (0, n.__assign)((0, n.__assign)({}, t.scaffold), {
 test = (0, n.__assign)(
     (0, n.__assign)((0, n.__assign)({}, l ? null : r), a),
     { $$id: t },
+);
+test = (0, n.__assign)(
+    {},
+    l,
+    null == a ? void 0 : a.state,
+    { $$editor: t },
+    t.wrapperProps,
+    { ref: this.refFn },
 )
 `;
-    // testTransformer(source3, transformSpreadAssignmentCall);
+    testTransformer(source3, [transformSpreadAssignmentCall]);
     const source4 = `
 const d = ((e) => {
   function t(...args) {
@@ -650,8 +746,96 @@ const d = ((e) => {
   );
   return (0, n.__decorate)([l.observer], t)
 })(i.BasePlugin);
+const s = ((e) => {
+    function t(...args) {
+      return (null !== e && e.apply(this, args)) || this;
+    }
+    (0, n.__extends)(t, e);
+    t.prototype.componentDidMount = function () {
+      this.markDom(this.props.$$editor.id),
+        this.props.$$node && requestAnimationFrame(() => {});
+    };
+    t.prototype.componentDidUpdate = function (e) {
+      this.markDom(this.props.$$editor.id);
+    };
+    t.prototype.getWrappedInstance = function () {
+      return this.ref;
+    };
+    t.prototype.refFn = function (e) {
+      this.ref = e;
+    };
+    t.prototype.markDom = function (e) {
+      let t;
+      let a;
+      const n = (0, o.findDOMNode)(this);
+      if (n && e) {
+        const l = this.props.$$editor,
+          i = !1 !== this.props.$$visible && !0 !== this.props.$$hidden,
+          r = l.wrapperResolve ? l.wrapperResolve(n) : n;
+        (Array.isArray(r) ? r : r ? [r] : []).forEach((t) => {
+          t.setAttribute("data-editor-id", e),
+            t.setAttribute("data-visible", i ? "" : "false");
+        }),
+          null ===
+            (a = null === (t = l.plugin) || void 0 === t ? void 0 : t.markDom) ||
+            void 0 === a ||
+            a.call(t, r, this.props);
+      }
+    };
+    t.prototype.render = function () {
+      const e = this.props;
+      const t = e.$$editor;
+      const a = e.$$node;
+      let l = (0, n.__rest)(e, ["$$editor", "$$node"]);
+      const o = t.renderer;
+      return (
+        t.filterProps && (l = t.filterProps.call(t.plugin, l, a)),
+        t.renderRenderer
+          ? t.renderRenderer.call(
+              t.plugin,
+              (0, n.__assign)(
+                (0, n.__assign)(
+                  (0, n.__assign)(
+                    (0, n.__assign)(
+                      (0, n.__assign)({}, l),
+                      null == a ? void 0 : a.state,
+                    ),
+                    { $$editor: t },
+                  ),
+                  t.wrapperProps,
+                ),
+                { ref: this.refFn },
+              ),
+              t,
+            )
+          : i.default.createElement(
+              o.component,
+              (0, n.__assign)(
+                {},
+                l,
+                null == a ? void 0 : a.state,
+                { $$editor: t },
+                t.wrapperProps,
+                { ref: this.refFn },
+              ),
+            )
+      );
+    };
+    (0, n.__decorate)(
+      [
+        r.autobind,
+        (0, n.__metadata)("design:type", Function),
+        (0, n.__metadata)("design:paramtypes", [Object]),
+        (0, n.__metadata)("design:returntype", void 0),
+      ],
+      t.prototype,
+      "refFn",
+      null,
+    );
+    return (0, n.__decorate)([l.observer], t);
+})(i.default.Component);
     `;
 
-    testTransformer(source4, transformClasses);
+    // testTransformer(source4, [transformClasses]);
 
 }

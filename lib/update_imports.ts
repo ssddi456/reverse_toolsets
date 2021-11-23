@@ -21,6 +21,7 @@ export default async function updateImports(appName: string) {
     const allFiles = loadAllFiles();
     allFiles.forEach(({ tsName, decompileName }) => {
         const sourceFile = project.addSourceFileAtPath(tsName)!;
+        console.log(`start tsName ${tsName}`);
 
         visitAllNodes(sourceFile, (node) => {
             if (Node.isCallExpression(node)
@@ -30,16 +31,18 @@ export default async function updateImports(appName: string) {
             ) {
                 const moduleName = (node.getArguments()[0] as NumericLiteral).getLiteralValue();
                 if (externalImports[moduleName]) {
+                    node.getExpression().replaceWithText('require');
                     node.getArguments()[0].replaceWithText(externalImports[moduleName]);
                 }
             }
             return node;
         });
 
+        console.log(`start transformClasses ${tsName}`);
 
         const transformed = ts.transform(sourceFile.compilerNode, [
-            transformSpreadAssignmentCall,
             transformReactCreateElementToJsx,
+            transformSpreadAssignmentCall,
             transformClasses,
         ]);
         const printer = ts.createPrinter();
@@ -47,8 +50,9 @@ export default async function updateImports(appName: string) {
         fs.writeFileSync(decompileName,
             prettier.format(printer.printFile(transformed.transformed[0] as ts.SourceFile), {
                 parser: 'typescript',
-                trailingComma: 'all'
+                trailingComma: 'all',
             })
         );
+        console.log(`all end ${tsName}`);
     });
 }
