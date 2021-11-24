@@ -3,7 +3,9 @@ import * as path from "path";
 import * as prettier from "prettier";
 import { Node, NumericLiteral } from "ts-morph";
 import { packageLoader, visitAllNodes } from './project_utils';
-import { transformClasses, transformReactCreateElementToJsx, transformSpreadAssignmentCall } from "./utils";
+import { transformClasses } from "./isClasses";
+import { transformSpreadAssignmentCall } from "./isSpreadAssignmentCall";
+import { transformReactCreateElementToJsx } from "./transformReactCreateElementToJsx";
 import * as ts from 'typescript';
 
 // ts-node -T bin\dewebpack.ts update_imports index.min.js > log

@@ -28,6 +28,4 @@ export default async function optimizeDecompile(appName: string) {
     const code = optimizeDecompileSourceFile(sourceFile);
 
     fs.writeFileSync(indexInfo.decompileName, code);
-
-
 }

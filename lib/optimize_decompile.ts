@@ -91,7 +91,8 @@ export function optimizeDecompileSourceFile(sourceFile: SourceFile) {
             node.removeName();
         }
         // resolve commaExpressions
-        if (Node.isBinaryExpression(node)
+        if (false
+            && Node.isBinaryExpression(node)
             && node.getOperatorToken().getText() === ','
         ) {
             console.log('commaExpression', parentKind, fileName);
