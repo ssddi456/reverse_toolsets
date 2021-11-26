@@ -16,9 +16,13 @@
         "sourceMap": true,
         "importHelpers": true,
         "allowJs": true,
+        "esModuleInterop": true,
         "outDir": "./compile"
     },
     "exclude": [
-        "./dist/*", "./repack/*"
+        "./dist/*",
+        "./repack/*",
+        "./compile/*",
+        "./source/*"
     ]
 }

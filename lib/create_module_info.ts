@@ -1,8 +1,8 @@
 import * as fs from "fs-extra";
 import * as path from "path";
 import { distRoot, } from "./consts";
-import * as uniq from 'lodash/uniq';
-import { Block, CodeBlockWriter, ExpressionStatement, Node, Project, SourceFile, Statement, StatementedNode } from "ts-morph";
+import uniq from 'lodash/uniq';
+import { Node, Project, SourceFile } from "ts-morph";
 
 import { InMemoryFileSystemHost, SyntaxKind } from '@ts-morph/common';
 import { FileInfo } from './optimize_decompile';

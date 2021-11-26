@@ -2,7 +2,7 @@ import fs = require('fs-extra');
 import * as path from 'path';
 import { SourceMapConsumer, RawSourceMap } from "source-map";
 
-export async function restoreFromSourceMap(filePath: string, sourceMapPath?: string): string {
+export async function restoreFromSourceMap(filePath: string, sourceMapPath?: string): Promise<{ parsed: string, source: string }> {
     const source = await fs.readFile(filePath, 'utf8');
 
     const sourceMapData = await (async () => {
@@ -11,11 +11,12 @@ export async function restoreFromSourceMap(filePath: string, sourceMapPath?: str
                 .find(line => line.includes('//# sourceMappingURL=')) || '');
     })();
 
-    const rawSourceMap = sourceMapData.split('//# sourceMappingURL=data:application/json;base64,')[1]；
-    const sourceMapBuffer = Buffer.from(rawSourceMap, 'base64').toString('ascii');
-    const parsed = new SourceMapConsumer(JSON.parse(sourceMapBuffer) as RawSourceMap);
+    const [_, rawSourceMap] = source.split('//# sourceMappingURL=data:application/json;base64,');
+    const sourceMapBuffer = Buffer.from(rawSourceMap, 'base64').toString('utf8');
+    // console.log('sourceMapBuffer', sourceMapBuffer);
 
-    fs.writeFile(path.basename(filePath) + '.ts', parsed.sourceContentFor(source), function (err) {
-        if (err) return console.log(err);
-    });
+    const sourceMapObj = JSON.parse(sourceMapBuffer) as RawSourceMap;
+    const parsed = (sourceMapObj.sourcesContent || []).join('');
+
+    return { parsed, source: sourceMapObj.sources[0] };
 }
