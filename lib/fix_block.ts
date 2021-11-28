@@ -18,6 +18,16 @@ export function transformFixBlock(context: ts.TransformationContext) {
                 factory.createBlock(transformedNode.statements, true)
             ]);
         } else if (
+            ts.isDefaultClause(transformedNode)
+            && (transformedNode.statements.length > 1
+                || !ts.isBlock(transformedNode.statements[0])
+            )
+        ) {
+            console.log("fix case block");
+            return factory.updateDefaultClause(transformedNode, [
+                factory.createBlock(transformedNode.statements, true)
+            ]);
+        } else if (
             ts.isIfStatement(transformedNode)
             && (!ts.isBlock(transformedNode.thenStatement)
                 || (
@@ -45,6 +55,8 @@ export function transformFixBlock(context: ts.TransformationContext) {
 };
 
 export function expandCommaExpression(node: ts.Expression, container: ts.Statement[], factory: ts.NodeFactory) {
+    console.log('expandCommaExpression', ts.SyntaxKind[node.kind]);
+
     let currentNode: ts.Expression = node;
     while (
         currentNode
@@ -52,68 +64,127 @@ export function expandCommaExpression(node: ts.Expression, container: ts.Stateme
         && currentNode.operatorToken.kind === ts.SyntaxKind.CommaToken
     ) {
         container.unshift(
-
             factory.createExpressionStatement(currentNode.right)
         );
-
-
         currentNode = currentNode.left;
     }
     container.unshift(factory.createExpressionStatement(currentNode));
 }
 
-export function transformExpandComma(context: ts.TransformationContext) {
+export function expandStatements(statements: ts.Statement[], factory: ts.NodeFactory) {
+    return statements
+        .reduce((pre, s) => {
+            if (ts.isExpressionStatement(s)) {
+                console.log('expression', ts.SyntaxKind[s.expression.kind]);
+                if (ts.isBinaryExpression(s.expression)
+                    && s.expression.operatorToken.kind === ts.SyntaxKind.CommaToken
+                ) {
+                    console.log('binarry ,');
+
+                    const temp: ts.Statement[] = [];
+                    expandCommaExpression(s.expression, temp, factory);
+                    pre.push(...expandStatements(temp, factory));
+                } else if (ts.isBinaryExpression(s.expression)
+                    && s.expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+                ) {
+                    console.log('binarry &&');
+
+                    pre.push(
+                        factory.createIfStatement(
+                            s.expression.left,
+                            factory.createBlock(expandStatements([
+                                factory.createExpressionStatement(s.expression.right)
+                            ], factory), true),
+                            undefined
+                        )
+                    );
+                } else if (ts.isBinaryExpression(s.expression)
+                    && s.expression.operatorToken.kind === ts.SyntaxKind.BarBarToken
+                ) {
+                    console.log('binarry ||');
+                    pre.push(
+                        factory.createIfStatement(
+                            factory.createLogicalNot(s.expression.left),
+                            factory.createBlock(expandStatements([
+                                factory.createExpressionStatement(s.expression.right)
+                            ], factory), true),
+                            undefined
+                        )
+                    );
+                } else if (
+                    s.expression
+                    && ts.isParenthesizedExpression(s.expression)
+                ) {
+                    console.log('parenthesized');
+                    const temp: ts.Statement[] = [];
+                    expandCommaExpression(s.expression.expression, temp, factory);
+                    console.log('temp', temp.length)
+                    pre.push(...expandStatements(temp, factory));
+                } else {
+                    console.log('wtff??', ts.SyntaxKind[s.expression.kind]);
+                    pre.push(s);
+                }
+            } else if (ts.isReturnStatement(s)
+                && s.expression
+            ) {
+                if (
+                    ts.isBinaryExpression(s.expression)
+                    && s.expression.operatorToken.kind === ts.SyntaxKind.CommaToken
+                ) {
+                    const temp: ts.Statement[] = [];
+                    temp.unshift(
+                        factory.updateReturnStatement(s, s.expression.right)
+                    );
+                    expandCommaExpression(s.expression.left, temp, factory);
+                    pre.push(...(expandStatements(temp, factory)));
+                } else if (
+                    ts.isParenthesizedExpression(s.expression)
+                    && ts.isBinaryExpression(s.expression.expression)
+                    && s.expression.expression.operatorToken.kind === ts.SyntaxKind.CommaToken
+                ) {
+                    const temp: ts.Statement[] = [];
+                    temp.unshift(
+                        factory.updateReturnStatement(s, s.expression.expression.right)
+                    );
+                    expandCommaExpression(s.expression.expression.left, temp, factory);
+                    pre.push(...expandStatements(temp, factory));
+                } else {
+                    pre.push(s);
+                }
+            } else {
+                pre.push(s);
+            }
+
+            return pre;
+        },
+            [] as ts.Statement[])
+}
+
+export function transformExpandStatement(context: ts.TransformationContext) {
     const factory = context.factory;
     function _transformer(_node: ts.Node): ts.Node {
         let transformedNode = _node;
 
         if (
             ts.isBlock(transformedNode)
+            || ts.isSourceFile(transformedNode)
+            || ts.isModuleBlock(transformedNode)
         ) {
-            console.log("fix case block");
-            transformedNode = factory.updateBlock(transformedNode,
-                transformedNode.statements
-                    .reduce((pre, s) => {
-                        if (ts.isExpressionStatement(s)
-                            && ts.isBinaryExpression(s.expression)
-                            && s.expression.operatorToken.kind === ts.SyntaxKind.CommaToken
-                        ) {
-                            const temp: ts.Statement[] = [];
-                            expandCommaExpression(s.expression, temp, factory);
-                            pre.push(...temp);
-                        } else if (ts.isReturnStatement(s)
-                            && s.expression
-                        ) {
-                            if (
-                                ts.isBinaryExpression(s.expression)
-                                && s.expression.operatorToken.kind === ts.SyntaxKind.CommaToken
-                            ) {
-                                const temp: ts.Statement[] = [];
-                                temp.unshift(
-                                    factory.updateReturnStatement(s, s.expression.right)
-                                );
-                                expandCommaExpression(s.expression.left, temp, factory);
-                                pre.push(...temp);
-                            } else if (
-                                ts.isParenthesizedExpression(s.expression)
-                                && ts.isBinaryExpression(s.expression.expression)
-                                && s.expression.expression.operatorToken.kind === ts.SyntaxKind.CommaToken
-                            ) {
-                                const temp: ts.Statement[] = [];
-                                temp.unshift(
-                                    factory.updateReturnStatement(s, s.expression.expression.right)
-                                );
-                                expandCommaExpression(s.expression.expression.left, temp, factory);
-                                pre.push(...temp);
-                            } else {
-                                pre.push(s);
-                            }
-                        } else {
-                            pre.push(s);
-                        }
-                        return pre;
-                    },
-                        [] as ts.Statement[]));
+            const statements = expandStatements([...transformedNode.statements], factory);
+
+            if (ts.isBlock(transformedNode)) {
+                transformedNode = factory.updateBlock(transformedNode, statements);
+            } else if (ts.isSourceFile(transformedNode)) {
+                transformedNode = factory.updateSourceFile(transformedNode,
+                    statements,
+                    transformedNode.isDeclarationFile,
+                    transformedNode.referencedFiles,
+                    transformedNode.typeReferenceDirectives,
+                    transformedNode.hasNoDefaultLib,
+                    transformedNode.libReferenceDirectives);
+            } else if (ts.isModuleBlock(transformedNode)) {
+                transformedNode = factory.updateModuleBlock(transformedNode, statements);
+            }
         }
         return ts.visitEachChild(transformedNode, _transformer, context);
     }
@@ -150,6 +221,12 @@ switch (n.label) {
 }
 if (some) console.log(1);
 if (other) {console.log(2);} else console.log(3);
+
+(r = this.addChild(a, l, o, i, t)) &&
+    (e.closeInsertPanel(),
+    setTimeout(() => {
+        e.setActiveId(r.$$id);
+    }, 100))
 `;
-    testTransformer(source1, [transformFixBlock, transformExpandComma]);
+    testTransformer(source1, [transformFixBlock, transformExpandStatement]);
 }

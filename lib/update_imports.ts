@@ -7,6 +7,10 @@ import { transformClasses } from "./isClasses";
 import { transformSpreadAssignmentCall } from "./isSpreadAssignmentCall";
 import { transformReactCreateElementToJsx } from "./transformReactCreateElementToJsx";
 import * as ts from 'typescript';
+import { transformFixBlock, transformExpandStatement } from "./fix_block";
+import { fixKeywordShortcut } from "./fix_keyword_shortcut";
+import { fixAsyncAwait } from "./fix_async_await";
+import { fixOptionalChaining } from "./fix_optional_chaining";
 
 // ts-node -T bin\dewebpack.ts update_imports index.min.js > log
 export default async function updateImports(appName: string) {
@@ -45,7 +49,12 @@ export default async function updateImports(appName: string) {
         const transformed = ts.transform(sourceFile.compilerNode, [
             transformReactCreateElementToJsx,
             transformSpreadAssignmentCall,
+            fixOptionalChaining,
             transformClasses,
+            transformFixBlock,
+            transformExpandStatement,
+            fixKeywordShortcut,
+            fixAsyncAwait,
         ]);
         const printer = ts.createPrinter();
 

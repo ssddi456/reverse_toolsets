@@ -1,6 +1,5 @@
 import fs = require('fs-extra');
-import * as path from 'path';
-import { SourceMapConsumer, RawSourceMap } from "source-map";
+import { RawSourceMap } from "source-map";
 
 export async function restoreFromSourceMap(filePath: string, sourceMapPath?: string): Promise<{ parsed: string, source: string }> {
     const source = await fs.readFile(filePath, 'utf8');

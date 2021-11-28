@@ -22,7 +22,6 @@
   "homepage": "https://github.com/ssddi456/reverse_toolsets#readme",
   "nodemonConfig": {
     "ignore": [
-      "test/*",
       "docs/*",
       "node_modules/*"
     ],
