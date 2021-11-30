@@ -1,3 +1,4 @@
+import { isParenthesizedExpression } from "@ts-morph/common/lib/typescript";
 import * as ts from "typescript";
 import { Node } from "./CompilerApi";
 import { expandStatements } from "./fix_block";
@@ -17,6 +18,33 @@ function getInstructionName(instruction: number): string {
     }
 }
 
+interface InstructionExpression extends Omit<ts.ArrayLiteralExpression, 'elements'> {
+    elements: [ts.NumericLiteral, ts.Expression];
+}
+
+interface Instruction extends ts.ReturnStatement {
+    expression: InstructionExpression;
+}
+
+function makeStatementFromInstuction(node: Instruction, factory: ts.NodeFactory): ts.Statement[] {
+    const instruction = node.expression.elements[0].getText();
+    console.log('instruction', instruction);
+    switch (instruction) {
+        case '2':
+            return [factory.createReturnStatement(node.expression.elements[1])];
+        case '4': // yield
+        case '5': // yield
+            return [factory.createExpressionStatement(factory.createAwaitExpression(node.expression.elements[1]))];
+        case '1': // break
+        case '3': // break
+        case '6':
+        case '7':
+            return [];
+        default:
+            throw new Error(`Unknown instruction ${instruction}`);
+    }
+
+}
 
 function isSentStatement(s: ts.Node): s is ts.ExpressionStatement {
     if (ts.isExpressionStatement(s)) {
@@ -60,6 +88,29 @@ function isSectionFallthrough(s: ts.Node): s is ts.ExpressionStatement {
         && s.expression.left.name.getText() === "label";
 }
 
+
+function getGenerateBody(statments: ts.Statement[], factory: ts.NodeFactory): ts.Statement[] {
+    return statments.map(x => {
+        if (ts.isReturnStatement(x)
+            && x.expression
+            && isParenthesizedNamedCallExpression('__generator', x.expression)
+        ) {
+            const generateBody = (x.expression.arguments[1] as ts.FunctionLikeDeclaration).body!;
+            console.log('generateBody', ts.SyntaxKind[generateBody.kind]);
+            if (ts.isArrayLiteralExpression(generateBody)) {
+                console.log('??--')
+                return factory.createReturnStatement(generateBody);
+            }
+            if (ts.isBlock(generateBody)) {
+                console.log('????');
+                return generateBody;
+            }
+            console.assert(true, `generateBody ${ts.SyntaxKind[generateBody.kind]}`);
+        }
+        return x;
+    }).filter(Boolean) as ts.Statement[];
+}
+
 interface AwaitSection {
     isBlank: boolean;
     index: string;
@@ -70,6 +121,7 @@ interface AwaitSection {
     hasReturn: boolean;
     statements: ts.Statement[];
 }
+
 export function fixAsyncAwait(context: ts.TransformationContext) {
     const factory = context.factory;
     const freeStatements: ts.Statement[] = [];
@@ -216,6 +268,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
 
     function _transformer(_node: ts.Node): ts.Node {
         let transformedNode = _node;
+        let awaiterBody: ts.Statement[] = [];
         if (
             (ts.isFunctionDeclaration(transformedNode)
                 || ts.isFunctionExpression(transformedNode)
@@ -236,7 +289,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
             if (ts.isBlock(transformedNode.body)) {
                 freeStatements.push(...transformedNode.body.statements.slice(0, -1));
                 const body = transformedNode.body.statements.slice(-1)[0] as ts.ReturnStatement;
-                const awaiterBody = getAwaiterBody(body.expression as ts.CallExpression);
+                awaiterBody = getAwaiterBody(body.expression as ts.CallExpression);
                 for (let index = 0; index < awaiterBody.length; index++) {
                     const element = awaiterBody[index];
                     if (!ts.isReturnStatement(element)) {
@@ -244,7 +297,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     }
                 }
             } else {
-                const awaiterBody = getAwaiterBody(transformedNode.body as ts.CallExpression);
+                awaiterBody = getAwaiterBody(transformedNode.body as ts.CallExpression);
                 for (let index = 0; index < awaiterBody.length; index++) {
                     const element = awaiterBody[index];
                     if (!ts.isReturnStatement(element)) {
@@ -263,7 +316,16 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 body.push(...freeStatements);
             }
             if (!labels.length) {
-                // body.push(...labels);
+                const generateBody = getGenerateBody(awaiterBody, factory);
+                console.log(
+                    generateBody.length,
+                    generateBody.map(s => ts.SyntaxKind[s.kind]),
+                    isInstruction(generateBody[generateBody.length - 1])
+                );
+                body.push(
+                    ...generateBody.slice(0, -1),
+                    ...makeStatementFromInstuction(generateBody[generateBody.length - 1] as Instruction, factory)
+                );
             }
             const modifiers = [
                 ...(transformedNode.modifiers || []).filter(m => m.kind !== ts.SyntaxKind.AsyncKeyword),
@@ -318,6 +380,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     factory.createBlock(body)
                 );
             }
+            return asyncFunction;
         }
         return ts.visitEachChild(_node, _transformer, context);
     }
@@ -338,79 +401,95 @@ export function reverseAsyncAwait(context: ts.TransformationContext) {
 
 if (require.main === module) {
     const source = `
-function openDebugForm(e, t) {
+// function openDebugForm(e, t) {
+//     return (0, n.__awaiter)(this, undefined, undefined, function () {
+//       let a;
+//       return (0, n.__generator)(this, function (l) {
+//         switch (l.label) {
+//           case 0: {
+//             return [
+//               4,
+//               this.manager.scaffold(
+//                 {
+//                   title: "上下文数据",
+//                   body: [{ ...this.dataViewer, readOnly: !t }],
+//                 },
+//                 { ctx: e },
+//               ),
+//             ];
+//           }
+//           case 1: {
+//             a = l.sent();
+//             if (!(null == t)) {
+//               t(a.ctx);
+//             }
+//             return [2];
+//           }
+//         }
+//       });
+//     });
+//   }
+// function handleConfirmClick() {
+//     let e;
+//     return (0, n.__awaiter)(this, undefined, undefined, function () {
+//       let t, a, l, i;
+//       return (0, n.__generator)(this, function (n) {
+//         switch (n.label) {
+//           case 0: {
+//             if (
+//               !(t =
+//                 null === (e = this.amisScope) || undefined === e
+//                   ? undefined
+//                   : e.getComponents()[0])
+//             ) {
+//               return [2];
+//             }
+//             a = this.props.store;
+//             n.label = 1;
+//           }
+//           case 1: {
+//             n.trys.push([1, 3, 4, 5]);
+//             a.setScaffoldBuzy(true);
+//             return [4, t.doAction({ type: "submit" }, t.props.data, true)];
+//           }
+//           case 2: {
+//             l = n.sent();
+//             this.handleConfirm([l]);
+//             return [3, 5];
+//           }
+//           case 3: {
+//             i = n.sent();
+//             console.log(i.stack);
+//             a.setScaffoldError(i.message);
+//             return [3, 5];
+//           }
+//           case 4: {
+//             a.setScaffoldBuzy(false);
+//             return [7];
+//           }
+//           case 5: {
+//             return [2];
+//           }
+//         }
+//       });
+//     });
+// }
+
+const scaffold = function (e, t) {
     return (0, n.__awaiter)(this, undefined, undefined, function () {
-      let a;
-      return (0, n.__generator)(this, function (l) {
-        switch (l.label) {
-          case 0: {
-            return [
-              4,
-              this.manager.scaffold(
-                {
-                  title: "上下文数据",
-                  body: [{ ...this.dataViewer, readOnly: !t }],
-                },
-                { ctx: e },
-              ),
-            ];
-          }
-          case 1: {
-            a = l.sent();
-            if (!(null == t)) {
-              t(a.ctx);
-            }
-            return [2];
-          }
-        }
-      });
+      const a = this;
+      return (0, n.__generator)(this, (l) => [
+        2,
+        new Promise((l) => {
+          a.store.openScaffoldForm({
+            ...e,
+            value: e.pipeIn ? e.pipeIn(t) : t,
+            callback: l,
+          });
+        }),
+      ]);
     });
-  }
-function handleConfirmClick() {
-    let e;
-    return (0, n.__awaiter)(this, undefined, undefined, function () {
-      let t, a, l, i;
-      return (0, n.__generator)(this, function (n) {
-        switch (n.label) {
-          case 0: {
-            if (
-              !(t =
-                null === (e = this.amisScope) || undefined === e
-                  ? undefined
-                  : e.getComponents()[0])
-            ) {
-              return [2];
-            }
-            a = this.props.store;
-            n.label = 1;
-          }
-          case 1: {
-            n.trys.push([1, 3, 4, 5]);
-            a.setScaffoldBuzy(true);
-            return [4, t.doAction({ type: "submit" }, t.props.data, true)];
-          }
-          case 2: {
-            l = n.sent();
-            this.handleConfirm([l]);
-            return [3, 5];
-          }
-          case 3: {
-            i = n.sent();
-            console.log(i.stack);
-            a.setScaffoldError(i.message);
-            return [3, 5];
-          }
-          case 4: {
-            a.setScaffoldBuzy(false);
-            return [7];
-          }
-          case 5: {
-            return [2];
-          }
-        }
-      });
-    });
-  }
+}
 `;
     testTransformer(source, [fixAsyncAwait]);
 }

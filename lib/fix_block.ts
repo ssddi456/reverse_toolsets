@@ -1,4 +1,5 @@
 import * as ts from "typescript";
+import { fixOptionalChaining } from "./fix_optional_chaining";
 import { testTransformer } from "./utils";
 
 
@@ -186,6 +187,26 @@ export function transformExpandStatement(context: ts.TransformationContext) {
                 transformedNode = factory.updateModuleBlock(transformedNode, statements);
             }
         }
+
+        if (ts.isArrowFunction(transformedNode)
+        && ts.isParenthesizedExpression(transformedNode.body)
+        && ts.isBinaryExpression(transformedNode.body.expression)
+        && transformedNode.body.expression.operatorToken.kind === ts.SyntaxKind.CommaToken
+        ) {
+            const expression = transformedNode.body.expression;
+            const body: ts.Statement[] = [];
+            expandCommaExpression(expression.left, body, factory);
+            body.push(...expandStatements(body, factory));
+            body.push(factory.createReturnStatement(expression.right));
+            transformedNode = factory.updateArrowFunction(transformedNode,
+                transformedNode.modifiers,
+                transformedNode.typeParameters,
+                transformedNode.parameters,
+                transformedNode.type,
+                transformedNode.equalsGreaterThanToken,
+                factory.createBlock(body, true),
+            );
+        }
         return ts.visitEachChild(transformedNode, _transformer, context);
     }
     return (_transformer as unknown) as ts.Transformer<ts.SourceFile>;
@@ -227,6 +248,44 @@ if (other) {console.log(2);} else console.log(3);
     setTimeout(() => {
         e.setActiveId(r.$$id);
     }, 100))
+
+(n) => (
+(t = []),
+(
+null ==
+(i = rows || items)
+    ? void 0
+    : i.length
+)
+? (Object.keys(
+        i[0]
+    ).forEach((e) => {
+        i[0][e],
+            t.push({
+                label: e,
+                type:
+                    "text",
+                name: e,
+            });
+    }),
+    formStore.setValues(
+        { columns: t }
+    ),
+    formStore.setValues(
+        {
+            filterSettingSource: t.map(
+                ({
+                    name,
+                }) =>
+                    name
+            ),
+        }
+    ))
+: l.toast.warning(
+        '   No data to display   '
+    ),
+[2]
+)
 `;
-    testTransformer(source1, [transformFixBlock, transformExpandStatement]);
+    testTransformer(source1, [transformFixBlock, transformExpandStatement, fixOptionalChaining]);
 }

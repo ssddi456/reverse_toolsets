@@ -52,9 +52,10 @@ export default async function updateImports(appName: string) {
             fixOptionalChaining,
             transformClasses,
             transformFixBlock,
+            fixOptionalChaining,
             transformExpandStatement,
             fixKeywordShortcut,
-            fixAsyncAwait,
+            // fixAsyncAwait,
         ]);
         const printer = ts.createPrinter();
 
