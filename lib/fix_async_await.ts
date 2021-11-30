@@ -17,7 +17,53 @@ function getInstructionName(instruction: number): string {
     }
 }
 
+
+function isSentStatement(s: ts.Node): s is ts.ExpressionStatement {
+    if (ts.isExpressionStatement(s)) {
+        const exp = (() => {
+            if (ts.isBinaryExpression(s.expression)
+                && s.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
+                && ts.isCallExpression(s.expression.right)
+            ) {
+                return s.expression.right;
+            } else if (ts.isCallExpression(s.expression)) {
+                return s.expression;
+            }
+            return undefined;
+        })();
+        if (exp) {
+            return ts.isPropertyAccessExpression(exp.expression) && exp.expression.name.getText() === "sent";
+        }
+    }
+    return false;
+}
+
+function isInstruction(s: ts.Node): s is ts.ReturnStatement {
+    return ts.isReturnStatement(s)
+        && !!s.expression
+        && ts.isArrayLiteralExpression(s.expression)
+        && s.expression.elements.length > 1
+        && ts.isNumericLiteral(s.expression.elements[0])
+}
+
+function isBreakInstruction(s: ts.Node): s is ts.ReturnStatement {
+    return isInstruction(s)
+        && (s!.expression! as ts.ArrayLiteralExpression).elements![0].getText() === '3';
+}
+
+function isSectionFallthrough(s: ts.Node): s is ts.ExpressionStatement {
+    return ts.isExpressionStatement(s)
+        && ts.isBinaryExpression(s.expression)
+        && s.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
+        && ts.isNumericLiteral(s.expression.right)
+        && ts.isPropertyAccessExpression(s.expression.left)
+        && s.expression.left.name.getText() === "label";
+}
+
 interface AwaitSection {
+    isBlank: boolean;
+    index: string;
+    tryCatch: number[]; // [try, catch, finally, next]
     hasBreak: boolean;
     hasReceiveAwait: boolean;
     hasYield: boolean;
@@ -31,7 +77,21 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
     const getUpdateInstruction = () => {
         const labels: string[] = [];
         const sections: AwaitSection[] = [];
+
         function updateInstruction(_node: ts.Node): ts.Node {
+
+            if (isParenthesizedNamedCallExpression('__generator', _node)) {
+                const transFormed = ts.visitEachChild(_node, updateInstruction, context);
+                return factory.updateCallExpression(transFormed,
+                    transFormed.expression,
+                    transFormed.typeArguments,
+                    [
+                        transFormed.arguments[0],
+                        (factory as any).converters.convertToFunctionExpression(transFormed.arguments[1])
+                    ]
+                );
+
+            }
             if (ts.isReturnStatement(_node)
                 && _node.expression
             ) {
@@ -95,6 +155,37 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 }
                 return node;
             }
+
+            if (node.statements.length <= 2) {
+                section.isBlank = !!node.statements.find(s => {
+                    return !isSentStatement(s)
+                        && !isBreakInstruction(s)
+                        && !isSectionFallthrough(s);
+                })
+            }
+
+            let trycatch: number[] = [];
+            node.statements.find(s => {
+                if (ts.isCallExpression(s)
+                    && ts.isPropertyAccessExpression(s.expression)
+                    && s.expression.name.getText() == 'push'
+                    && ts.isPropertyAccessExpression(s.expression.expression)
+                    && s.expression.expression.name.getText() == 'trys'
+                ) {
+                    trycatch = s.arguments.map(a => {
+                        if (ts.isNumericLiteral(a)) {
+                            return parseInt(a.text);
+                        }
+                        return -1;
+                    });
+                    return s;
+                }
+            });
+
+            if (trycatch.length > 0) {
+                section.tryCatch = trycatch;
+            }
+
             section.statements = [...node.statements];
             ts.visitEachChild(node, loadSectionInfo, context);
 
@@ -161,10 +252,72 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     }
                 }
             }
+
             const { labels, updateInstruction } = getUpdateInstruction();
             const asyncFunction = ts.visitEachChild(_node, updateInstruction, context);
             console.log('found labels ', labels);
+
+            const body: ts.Statement[] = [];
+
+            if (freeStatements.length > 0) {
+                body.push(...freeStatements);
+            }
+            if (!labels.length) {
+                // body.push(...labels);
+            }
+            const modifiers = [
+                ...(transformedNode.modifiers || []).filter(m => m.kind !== ts.SyntaxKind.AsyncKeyword),
+                factory.createModifier(ts.SyntaxKind.AsyncKeyword),
+            ];
+
             return asyncFunction;
+
+            if (ts.isFunctionDeclaration(transformedNode)) {
+                return factory.createFunctionDeclaration(
+                    transformedNode.decorators,
+                    modifiers,
+                    transformedNode.asteriskToken,
+                    transformedNode.name,
+                    transformedNode.typeParameters,
+                    transformedNode.parameters,
+                    transformedNode.type,
+                    factory.createBlock(body)
+                );
+            }
+            if (ts.isFunctionExpression(transformedNode)) {
+                return factory.createFunctionExpression(
+                    modifiers,
+                    transformedNode.asteriskToken,
+                    transformedNode.name,
+                    transformedNode.typeParameters,
+                    transformedNode.parameters,
+                    transformedNode.type,
+                    factory.createBlock(body)
+                );
+            }
+            if (ts.isArrowFunction(transformedNode)) {
+                return factory.createArrowFunction(
+                    modifiers,
+                    transformedNode.typeParameters,
+                    transformedNode.parameters,
+                    transformedNode.type,
+                    transformedNode.equalsGreaterThanToken,
+                    factory.createBlock(body)
+                );
+            }
+            if (ts.isMethodDeclaration(transformedNode)) {
+                return factory.createMethodDeclaration(
+                    transformedNode.decorators,
+                    modifiers,
+                    transformedNode.asteriskToken,
+                    transformedNode.name,
+                    transformedNode.questionToken,
+                    transformedNode.typeParameters,
+                    transformedNode.parameters,
+                    transformedNode.type,
+                    factory.createBlock(body)
+                );
+            }
         }
         return ts.visitEachChild(_node, _transformer, context);
     }

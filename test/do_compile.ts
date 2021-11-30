@@ -17,6 +17,13 @@ l.props.envCreator?.(l.props)
 
 const source1 = `
 const a = async (a) => {
+    try {
+        await console.log(1);
+    }
+    catch (e){}
+    finally {
+        console.log(2);
+    }
     switch (await a) {
         case 1: {
             await a;
@@ -35,7 +42,14 @@ const a = async (a) => {
     const m = 3;
     return 1;
 }
+async function a() {
+}
 `;
-let result = ts.transpileModule(source1, { compilerOptions: { module: ts.ModuleKind.CommonJS } });
+let result = ts.transpileModule(source1, {
+    compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        noEmitHelpers: false,
+    }
+});
 
 console.log(result.outputText);
