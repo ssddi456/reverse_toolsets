@@ -44,11 +44,35 @@ const a = async (a) => {
 }
 async function a() {
 }
+(row || col)?.length
 `;
-let result = ts.transpileModule(source1, {
+
+const source2 = `
+[a, ...b, c];
+[...b, c];
+[a, ...b];
+`;
+const source3 = `
+async function test () {
+    let e, t, a;
+    e = this.state;
+    t = e.wrongSchema;
+    a = e.value;
+    t &&    ((await s.prompt([])) ? this.setState({
+                    wrongSchema: "",
+                    contents: JSON.stringify(a),
+                  })
+                : this.editor.focus());
+    return;
+}
+async function test () {
+    t? (some, await s.prompt([])): (22, await this.editor.focus());
+}
+`;
+let result = ts.transpileModule(source3, {
     compilerOptions: {
         module: ts.ModuleKind.CommonJS,
-        noEmitHelpers: false,
+        noEmitHelpers: true,
     }
 });
 

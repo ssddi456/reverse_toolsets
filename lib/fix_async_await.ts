@@ -1,4 +1,4 @@
-import { isParenthesizedExpression } from "@ts-morph/common/lib/typescript";
+import { isParenthesizedExpression, nodeModuleNameResolver } from "@ts-morph/common/lib/typescript";
 import * as ts from "typescript";
 import { Node } from "./CompilerApi";
 import { expandStatements } from "./fix_block";
@@ -26,8 +26,8 @@ interface Instruction extends ts.ReturnStatement {
     expression: InstructionExpression;
 }
 
-function makeStatementFromInstuction(node: Instruction, factory: ts.NodeFactory): ts.Statement[] {
-    const instruction = node.expression.elements[0].getText();
+function makeStatementFromInstuction(node: InstructionNode, factory: ts.NodeFactory): ts.Statement[] {
+    const instruction = node.expression.elements[0].text;
     console.log('instruction', instruction);
     switch (instruction) {
         case '2':
@@ -66,7 +66,13 @@ function isSentStatement(s: ts.Node): s is ts.ExpressionStatement {
     return false;
 }
 
-function isInstruction(s: ts.Node): s is ts.ReturnStatement {
+interface InstructionNode extends ts.ReturnStatement {
+    expression: {
+        elements: [ts.NumericLiteral, ts.Expression] | [ts.NumericLiteral]
+    } & ts.ArrayLiteralExpression;
+}
+
+function isInstruction(s: ts.Node): s is InstructionNode {
     return ts.isReturnStatement(s)
         && !!s.expression
         && ts.isArrayLiteralExpression(s.expression)
@@ -76,7 +82,7 @@ function isInstruction(s: ts.Node): s is ts.ReturnStatement {
 
 function isBreakInstruction(s: ts.Node): s is ts.ReturnStatement {
     return isInstruction(s)
-        && (s!.expression! as ts.ArrayLiteralExpression).elements![0].getText() === '3';
+        && s.expression.elements![0].getText() === '3';
 }
 
 function isSectionFallthrough(s: ts.Node): s is ts.ExpressionStatement {
@@ -111,7 +117,11 @@ function getGenerateBody(statments: ts.Statement[], factory: ts.NodeFactory): ts
     }).filter(Boolean) as ts.Statement[];
 }
 
+function getYieldExpression(node: InstructionNode) {
+    return node.expression.elements[1];
+}
 interface AwaitSection {
+    merged: boolean;
     isBlank: boolean;
     index: string;
     tryCatch: number[]; // [try, catch, finally, next]
@@ -132,18 +142,35 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
 
         function updateInstruction(_node: ts.Node): ts.Node {
 
-            if (isParenthesizedNamedCallExpression('__generator', _node)) {
+            if (isParenthesizedNamedCallExpression('__generator', _node)
+                && _node.arguments.length === 2
+                && ts.isFunctionLike(_node.arguments[1])
+            ) {
+                console.log('!!! ');
+
                 const transFormed = ts.visitEachChild(_node, updateInstruction, context);
+                const generateBody = transFormed.arguments[1] as ts.FunctionLikeDeclaration;
+                console.assert(ts.isFunctionLike(transFormed.arguments[1]), '???');
                 return factory.updateCallExpression(transFormed,
                     transFormed.expression,
                     transFormed.typeArguments,
                     [
                         transFormed.arguments[0],
-                        (factory as any).converters.convertToFunctionExpression(transFormed.arguments[1])
+                        factory.createFunctionExpression(
+                            generateBody.modifiers,
+                            generateBody.asteriskToken,
+                            undefined,
+                            generateBody.typeParameters,
+                            generateBody.parameters,
+                            generateBody.type,
+                            (factory as any).converters.convertToFunctionBlock(
+                                ts.visitEachChild(transFormed.arguments[1], updateInstruction, context)
+                            )
+                        )
                     ]
                 );
-
             }
+
             if (ts.isReturnStatement(_node)
                 && _node.expression
             ) {
@@ -176,7 +203,9 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
         }
 
         function getLoadSectionInfo(node: ts.CaseClause) {
-            const section = {} as AwaitSection;
+            const section = {
+                index: node.expression.getText(),
+            } as AwaitSection;
 
             function loadSectionInfo(node: ts.Node): ts.Node {
                 node = ts.visitEachChild(node, loadSectionInfo, context);
@@ -244,15 +273,62 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
             return section;
         }
 
+        function joinSections() {
+            return sections.reduce((pre, current, index) => {
+                if (current.merged) {
+                    return pre;
+                }
+                if (current.hasYield) {
+                    const next = sections[index + 1];
+                    if (next) {
+                        next.merged = true;
+                    } else {
+                        throw new Error('???');
+                    }
+
+                    const lastExpresion = current.statements[current.statements.length - 1] as InstructionNode;
+                    console.log('lastExpresion', ts.SyntaxKind[lastExpresion.kind]);
+                    console.assert(isInstruction(lastExpresion), '???');
+
+                    pre.push({
+                        ...current,
+
+                        isBlank: false,
+                        statements: [
+                            ...current.statements.slice(0, -1),
+                            factory.createExpressionStatement(
+                                ts.isBinaryExpression(next.statements[0])
+                                    ? factory.createBinaryExpression(
+                                        next.statements[0].left,
+                                        next.statements[0].operatorToken,
+                                        getYieldExpression(lastExpresion)
+                                    )
+
+                                    : factory.createAwaitExpression(
+                                        getYieldExpression(lastExpresion)
+                                    )
+                            ),
+                            ...next.statements.slice(1),
+                        ]
+                    });
+                }
+                return pre;
+            }, [] as AwaitSection[]);
+        }
         return {
             labels,
             sections,
             freeStatements,
+            joinSections,
             updateInstruction
         }
     }
 
-    function isAwaiterBody(node: ts.Node): node is ts.CallExpression {
+    interface Awaiter extends Omit<ts.CallExpression, 'arguments'> {
+        expression: { right: { name: { text: '__awaiter' } & ts.Identifier } & ts.PropertyAccessExpression } & ts.ParenthesizedExpression;
+        arguments: [ts.Node, ts.Node, ts.Node, ts.FunctionExpression];
+    }
+    function isAwaiterBody(node: ts.Node): node is Awaiter {
         return isParenthesizedNamedCallExpression('__awaiter', node)
             && node.arguments.length == 4
             && ts.isFunctionExpression(node.arguments[3])
@@ -262,7 +338,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     && isParenthesizedNamedCallExpression('__generator', s.expression)
             })
     }
-    function getAwaiterBody(node: ts.CallExpression): ts.Statement[] {
+    function getAwaiterBody(node: Awaiter): ts.Statement[] {
         return [...((node.arguments[3] as ts.FunctionExpression).body.statements)];
     }
 
@@ -289,24 +365,12 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
             if (ts.isBlock(transformedNode.body)) {
                 freeStatements.push(...transformedNode.body.statements.slice(0, -1));
                 const body = transformedNode.body.statements.slice(-1)[0] as ts.ReturnStatement;
-                awaiterBody = getAwaiterBody(body.expression as ts.CallExpression);
-                for (let index = 0; index < awaiterBody.length; index++) {
-                    const element = awaiterBody[index];
-                    if (!ts.isReturnStatement(element)) {
-                        freeStatements.push(element);
-                    }
-                }
+                awaiterBody = getAwaiterBody(body.expression as Awaiter);
             } else {
-                awaiterBody = getAwaiterBody(transformedNode.body as ts.CallExpression);
-                for (let index = 0; index < awaiterBody.length; index++) {
-                    const element = awaiterBody[index];
-                    if (!ts.isReturnStatement(element)) {
-                        freeStatements.push(element);
-                    }
-                }
+                awaiterBody = getAwaiterBody(transformedNode.body);
             }
 
-            const { labels, updateInstruction } = getUpdateInstruction();
+            const { labels, updateInstruction, joinSections } = getUpdateInstruction();
             const asyncFunction = ts.visitEachChild(_node, updateInstruction, context);
             console.log('found labels ', labels);
 
@@ -317,22 +381,26 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
             }
             if (!labels.length) {
                 const generateBody = getGenerateBody(awaiterBody, factory);
-                console.log(
-                    generateBody.length,
-                    generateBody.map(s => ts.SyntaxKind[s.kind]),
-                    isInstruction(generateBody[generateBody.length - 1])
-                );
                 body.push(
                     ...generateBody.slice(0, -1),
-                    ...makeStatementFromInstuction(generateBody[generateBody.length - 1] as Instruction, factory)
+                    ...makeStatementFromInstuction(generateBody[generateBody.length - 1] as InstructionNode, factory)
                 );
+            } else {
+                const sections = joinSections();
+                sections.forEach(s => {
+                    body.push(...s.statements.map(s => {
+                        if (isInstruction(s)) {
+                            return makeStatementFromInstuction(s, factory)[0];
+                        }
+                        return s;
+                    }));
+                });
+
             }
             const modifiers = [
                 ...(transformedNode.modifiers || []).filter(m => m.kind !== ts.SyntaxKind.AsyncKeyword),
                 factory.createModifier(ts.SyntaxKind.AsyncKeyword),
             ];
-
-            return asyncFunction;
 
             if (ts.isFunctionDeclaration(transformedNode)) {
                 return factory.createFunctionDeclaration(
@@ -400,81 +468,87 @@ export function reverseAsyncAwait(context: ts.TransformationContext) {
 }
 
 if (require.main === module) {
+    // simple yield
     const source = `
-// function openDebugForm(e, t) {
-//     return (0, n.__awaiter)(this, undefined, undefined, function () {
-//       let a;
-//       return (0, n.__generator)(this, function (l) {
-//         switch (l.label) {
-//           case 0: {
-//             return [
-//               4,
-//               this.manager.scaffold(
-//                 {
-//                   title: "上下文数据",
-//                   body: [{ ...this.dataViewer, readOnly: !t }],
-//                 },
-//                 { ctx: e },
-//               ),
-//             ];
-//           }
-//           case 1: {
-//             a = l.sent();
-//             if (!(null == t)) {
-//               t(a.ctx);
-//             }
-//             return [2];
-//           }
-//         }
-//       });
-//     });
-//   }
-// function handleConfirmClick() {
-//     let e;
-//     return (0, n.__awaiter)(this, undefined, undefined, function () {
-//       let t, a, l, i;
-//       return (0, n.__generator)(this, function (n) {
-//         switch (n.label) {
-//           case 0: {
-//             if (
-//               !(t =
-//                 null === (e = this.amisScope) || undefined === e
-//                   ? undefined
-//                   : e.getComponents()[0])
-//             ) {
-//               return [2];
-//             }
-//             a = this.props.store;
-//             n.label = 1;
-//           }
-//           case 1: {
-//             n.trys.push([1, 3, 4, 5]);
-//             a.setScaffoldBuzy(true);
-//             return [4, t.doAction({ type: "submit" }, t.props.data, true)];
-//           }
-//           case 2: {
-//             l = n.sent();
-//             this.handleConfirm([l]);
-//             return [3, 5];
-//           }
-//           case 3: {
-//             i = n.sent();
-//             console.log(i.stack);
-//             a.setScaffoldError(i.message);
-//             return [3, 5];
-//           }
-//           case 4: {
-//             a.setScaffoldBuzy(false);
-//             return [7];
-//           }
-//           case 5: {
-//             return [2];
-//           }
-//         }
-//       });
-//     });
-// }
-
+function openDebugForm(e, t) {
+    return (0, n.__awaiter)(this, undefined, undefined, function () {
+      let a;
+      return (0, n.__generator)(this, function (l) {
+        switch (l.label) {
+          case 0: {
+            return [
+              4,
+              this.manager.scaffold(
+                {
+                  title: "上下文数据",
+                  body: [{ ...this.dataViewer, readOnly: !t }],
+                },
+                { ctx: e },
+              ),
+            ];
+          }
+          case 1: {
+            a = l.sent();
+            if (!(null == t)) {
+              t(a.ctx);
+            }
+            return [2];
+          }
+        }
+      });
+    });
+  }
+`;
+    // trys
+    const source1 = `
+function handleConfirmClick() {
+    let e;
+    return (0, n.__awaiter)(this, undefined, undefined, function () {
+      let t, a, l, i;
+      return (0, n.__generator)(this, function (n) {
+        switch (n.label) {
+          case 0: {
+            if (
+              !(t =
+                null === (e = this.amisScope) || undefined === e
+                  ? undefined
+                  : e.getComponents()[0])
+            ) {
+              return [2];
+            }
+            a = this.props.store;
+            n.label = 1;
+          }
+          case 1: {
+            n.trys.push([1, 3, 4, 5]);
+            a.setScaffoldBuzy(true);
+            return [4, t.doAction({ type: "submit" }, t.props.data, true)];
+          }
+          case 2: {
+            l = n.sent();
+            this.handleConfirm([l]);
+            return [3, 5];
+          }
+          case 3: {
+            i = n.sent();
+            console.log(i.stack);
+            a.setScaffoldError(i.message);
+            return [3, 5];
+          }
+          case 4: {
+            a.setScaffoldBuzy(false);
+            return [7];
+          }
+          case 5: {
+            return [2];
+          }
+        }
+      });
+    });
+}
+`;
+    // arrow function
+    const source2 = `
 const scaffold = function (e, t) {
     return (0, n.__awaiter)(this, undefined, undefined, function () {
       const a = this;
@@ -491,5 +565,67 @@ const scaffold = function (e, t) {
     });
 }
 `;
-    testTransformer(source, [fixAsyncAwait]);
+    // condition yield
+    const source3 = `
+handleBlur = () =>
+      (0, n.__awaiter)(t, undefined, undefined, function () {
+        let e, t, a;
+        return (0, n.__generator)(this, function (n) {
+          switch (n.label) {
+            case 0: {
+              e = this.state;
+              t = e.wrongSchema;
+              a = e.value;
+              return t
+                ? [
+                    4,
+                    (0, s.prompt)(
+                      [
+                        {
+                          className: "w-full",
+                          type: "tpl",
+                          label: false,
+                          tpl: "当前有部分已更改数据因为格式不正确尚未保存，您确认要丢弃这部分更改吗？",
+                        },
+                        {
+                          type: "switch",
+                          label: false,
+                          option: "查看更改",
+                          name: "diff",
+                          value: false,
+                        },
+                        {
+                          visibleOn: "this.diff",
+                          label: false,
+                          type: "diff-editor",
+                          allowFullscreen: true,
+                          disabled: true,
+                          name: "newValue",
+                          size: "xxl",
+                          language: "json",
+                          diffValue: "\${oldValue}",
+                        },
+                      ],
+                      { oldValue: a, newValue: t },
+                      "请确认",
+                    ),
+                  ]
+                : [2];
+            }
+            case 1: {
+              n.sent()
+                ? this.setState({
+                    wrongSchema: "",
+                    contents: JSON.stringify(a),
+                  })
+                : this.editor.focus();
+              return [2];
+            }
+          }
+        });
+      });
+    return t;
+  }
+`;
+    testTransformer(source3, [fixAsyncAwait]);
 }

@@ -6,7 +6,7 @@ export function fixOptionalChaining(context: ts.TransformationContext) {
     const factory = context.factory;
     function _transformer(_node: ts.Node): ts.Node {
         let transformedNode = ts.visitEachChild(_node, _transformer, context);
-
+        // (null === x || void 0 === x ? void 0 : x
         if (ts.isConditionalExpression(transformedNode)
 
             && ts.isVoidExpression(transformedNode.whenTrue)
@@ -27,14 +27,18 @@ export function fixOptionalChaining(context: ts.TransformationContext) {
                 const expression = (() => {
                     if (ts.isIdentifier(transformedNode.condition.left.right)) {
                         return transformedNode.condition.left.right;
-                    } if (ts.isParenthesizedExpression(transformedNode.condition.left.right)
+                    } 
+                    // ( = )
+                    if (ts.isParenthesizedExpression(transformedNode.condition.left.right)
                         && ts.isBinaryExpression(transformedNode.condition.left.right.expression)
                         && transformedNode.condition.left.right.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
                     ) {
                         return transformedNode.condition.left.right.expression.right;
                     }
+                    
                     return transformedNode.condition.left.right;
                 })();
+
                 return factory.createPropertyAccessChain(
                     expression,
                     factory.createToken(ts.SyntaxKind.QuestionDotToken),
@@ -46,7 +50,6 @@ export function fixOptionalChaining(context: ts.TransformationContext) {
                 const expressionNode = transformedNode.condition.left.right;
                 const callExpressionMethod = callExpression.expression;
 
-                console.log("expressionNode", ts.SyntaxKind[expressionNode.kind]);
                 if (ts.isIdentifier(callExpressionMethod)) {
                     return factory.createCallChain(
                         callExpressionMethod,
@@ -57,10 +60,12 @@ export function fixOptionalChaining(context: ts.TransformationContext) {
                 }
 
                 const expression = (() => {
+                    // (x = b)
                     if (ts.isParenthesizedExpression(expressionNode)
                         && ts.isBinaryExpression(expressionNode.expression)
                         && expressionNode.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
                     ) {
+                        // (x = b).x
                         if (ts.isPropertyAccessExpression(expressionNode.expression.right)
                             && ts.isParenthesizedExpression(expressionNode.expression.right.expression)
                             && ts.isBinaryExpression(expressionNode.expression.right.expression.expression)
@@ -75,6 +80,7 @@ export function fixOptionalChaining(context: ts.TransformationContext) {
                     }
                     return expressionNode;
                 })();
+
                 if (ts.isPropertyAccessExpression(callExpressionMethod)) {
 
                     if (ts.isIdentifier(callExpressionMethod.name)
@@ -128,6 +134,7 @@ null === (a = (t = l.props).envCreator) || void 0 === a
 
 null === a || void 0 === a ? void 0 : a.a(1);
 null === a || void 0 === a ? void 0 : a(1);
+null === (i = (rows || items)) || void 0 === i? void 0 : i.length;
 `;
     testTransformer(source, [fixOptionalChaining]);
 }
