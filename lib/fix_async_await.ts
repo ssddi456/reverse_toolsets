@@ -277,7 +277,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
             const section = {
                 index: sectionRoot.expression.getText(),
             } as AwaitSection;
-
+            let trycatch: number[] = [];
             function loadSectionInfo(node: ts.Node): ts.Node {
                 // fix parent;
                 ts.visitEachChild(node, function (child) {
@@ -315,6 +315,23 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                         }
                     }
                 }
+
+                if (ts.isCallExpression(node)
+                    && ts.isPropertyAccessExpression(node.expression)
+                    && node.expression.name.getText() == 'push'
+                    && ts.isPropertyAccessExpression(node.expression.expression)
+                    && node.expression.expression.name.getText() == 'trys'
+                    && ts.isArrayLiteralExpression(node.arguments[0])
+                ) {
+                    trycatch = node.arguments[0].elements.map(a => {
+                        if (ts.isNumericLiteral(a)) {
+                            return parseInt(a.text);
+                        }
+                        return -1;
+                    });
+                    console.log('found trys', trycatch);
+                }
+
                 return node;
             }
 
@@ -326,34 +343,18 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 })
             }
 
-            let trycatch: number[] = [];
+
             const statements = (ts.isBlock(sectionRoot.statements[0]) && sectionRoot.statements.length == 1)
                 ? sectionRoot.statements[0].statements
                 : sectionRoot.statements;
-            statements.find(s => {
-                if (ts.isCallExpression(s)
-                    && ts.isPropertyAccessExpression(s.expression)
-                    && s.expression.name.getText() == 'push'
-                    && ts.isPropertyAccessExpression(s.expression.expression)
-                    && s.expression.expression.name.getText() == 'trys'
-                ) {
-                    trycatch = s.arguments.map(a => {
-                        if (ts.isNumericLiteral(a)) {
-                            return parseInt(a.text);
-                        }
-                        return -1;
-                    });
-                    return s;
-                }
-            });
-
-            if (trycatch.length > 0) {
-                section.tryCatch = trycatch;
-            }
 
             section.statements = [...statements];
             ts.visitEachChild(sectionRoot, loadSectionInfo, context);
 
+            console.log('trycatch', trycatch);
+            if (trycatch.length > 0) {
+                section.tryCatch = trycatch;
+            }
             return section;
         }
 
@@ -381,12 +382,13 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     )
                     )}`);
 
-
+                    console.log('current.tryCatch, next.tryCatch', current.tryCatch, next.tryCatch);
                     if (current.topYield) {
                         pre.push({
                             ...current,
                             hasYield: false,
                             isBlank: false,
+                            tryCatch: current.tryCatch || next.tryCatch,
                             statements: [
                                 ...current.statements.slice(0, -1),
                                 replaceExpression(next.statements[0], isSentCall, factory.createAwaitExpression(
@@ -405,6 +407,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                             ...current,
                             hasYield: false,
                             isBlank: false,
+                            tryCatch: current.tryCatch || next.tryCatch,
                             statements: [
                                 ...current.statements.map(s => {
                                     return replaceExpression(s, (node) => node === current.yieldContainer,
@@ -498,6 +501,9 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
 
         function joinSections() {
             console.log('before joinSections', sections.length);
+            sections.map(s => {
+                console.log('section', s.index, s.tryCatch);
+            });
             const noYields = joinYields(sections);
             return joinTry(noYields);
         }
