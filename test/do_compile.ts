@@ -24,6 +24,7 @@ const a = async (a) => {
     finally {
         console.log(2);
     }
+    console.log(2222);
     switch (await a) {
         case 1: {
             await a;
@@ -69,7 +70,7 @@ async function test () {
     t? (some, await s.prompt([])): (22, await this.editor.focus());
 }
 `;
-let result = ts.transpileModule(source3, {
+let result = ts.transpileModule(source1, {
     compilerOptions: {
         module: ts.ModuleKind.CommonJS,
         noEmitHelpers: true,

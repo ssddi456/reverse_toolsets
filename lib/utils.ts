@@ -272,3 +272,44 @@ export function testTransformer(code: string, transformers: ts.TransformerFactor
         })
     );
 }
+
+export function replaceExpression(root: ts.Node, testFunction: (node: ts.Node) => boolean, replaceWith: ts.Node, context: ts.TransformationContext) {
+    function visiter(node: ts.Node): ts.Node {
+        if (testFunction(node)) {
+            return replaceWith;
+        }
+        return ts.visitEachChild(node, visiter, context);
+    }
+    return ts.visitEachChild(root, visiter, context);
+}
+
+export function isBlockLike(node: ts.Node): node is ts.BlockLike {
+    return ts.isBlock(node)
+        || ts.isSourceFile(node)
+        || ts.isModuleBlock(node)
+        || ts.isCaseOrDefaultClause(node)
+}
+
+export function updateBlocklike(node: ts.BlockLike, statements: ts.Statement[], factory: ts.NodeFactory): ts.BlockLike {
+    if (ts.isBlock(node)) {
+        return factory.updateBlock(node, statements);
+    } else if (ts.isSourceFile(node)) {
+        return factory.updateSourceFile(
+            node,
+            statements,
+            node.isDeclarationFile,
+            node.referencedFiles,
+            node.typeReferenceDirectives,
+            node.hasNoDefaultLib,
+            node.libReferenceDirectives,
+        );
+    } else if (ts.isModuleBlock(node)) {
+        return factory.updateModuleBlock(node, statements);
+    } else if (ts.isCaseClause(node)) {
+        return factory.updateCaseClause(node, node.expression, statements);
+    } else if (ts.isDefaultClause(node)) {
+        return factory.updateDefaultClause(node, statements);
+    } else {
+        throw new Error('unexpected node type');
+    }
+}
