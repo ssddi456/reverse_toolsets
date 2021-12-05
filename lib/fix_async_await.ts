@@ -1,8 +1,8 @@
 // Error.stackTraceLimit = Infinity;
 
-import { log } from 'console';
 import * as ts from "typescript";
-import { isBlockLike, isParenthesizedNamedCallExpression, replaceExpression, testTransformer, updateBlocklike } from "./utils";
+import { expandStatements, transformExpandStatement } from "./fix_block";
+import { isBlockLike, isParenthesizedNamedCallExpression, replaceExpression, testTransformer, updateBlocklike, makeRemoveExpressionOfType } from "./utils";
 
 function getInstructionName(instruction: number): string {
     switch (instruction) {
@@ -26,35 +26,6 @@ interface Instruction extends ts.ReturnStatement {
     expression: InstructionExpression;
 }
 
-function makeStatementFromInstuction(node: InstructionNode<string>, factory: ts.NodeFactory): ts.Statement[] {
-    const instruction = node.expression.elements[0].text;
-    console.log('instruction', instruction);
-    switch (instruction) {
-        case '2':
-            if (node.expression.elements.length === 2) {
-                return [
-                    factory.createReturnStatement(node.expression.elements[1])
-                ];
-            } else {
-                return [
-                    factory.createReturnStatement()
-                ];
-            }
-        case '4': // yield
-        case '5': // yield
-            return [factory.createExpressionStatement(factory.createAwaitExpression(node.expression.elements[1]))];
-        case '1': // break
-        case '3': // break
-        case '6':
-        case '7':
-            console.log('instruction', instruction, getInstructionName(parseInt(instruction)));
-            return [];
-        default:
-            throw new Error(`Unknown instruction ${instruction}`);
-    }
-
-}
-
 interface SentCall extends ts.CallExpression {
     expression: {
         name: { escapedText: 'sent' } & ts.Identifier;
@@ -72,7 +43,7 @@ interface SentStatement extends ts.ExpressionStatement {
 function isSentCall(node: ts.Node): node is SentCall {
     return ts.isCallExpression(node)
         && ts.isPropertyAccessExpression(node.expression)
-        && node.expression.name.getText() === "sent";
+        && node.expression.name.escapedText === "sent";
 }
 
 function isSentStatement(s: ts.Node): s is SentStatement {
@@ -109,14 +80,24 @@ function isInstruction(s: ts.Node): s is InstructionNode<string> {
     return ts.isReturnStatement(s)
         && !!s.expression
         && ts.isArrayLiteralExpression(s.expression)
-        && s.expression.elements.length > 1
+        && s.expression.elements.length >= 1
         && ts.isNumericLiteral(s.expression.elements[0])
 }
 
-function isBreakInstruction(s: ts.Node): s is InstructionNode<'3'> {
+function isReturnInstruction(s: ts.Node): s is InstructionNode<'2'> {
+    return isInstruction(s)
+        && s.expression.elements![0].text === '2';
+}
+
+function isBreakInstruction(s: ts.Node): s is {
+    expression: {
+        elements: [InstructionTypeNode<'3'>, ts.NumericLiteral]
+    }
+} & InstructionNode<'3'> {
     return isInstruction(s)
         && s.expression.elements![0].text === '3';
 }
+
 function isYieldInstruction(s: ts.Node): s is InstructionNode<'4' | '5'> {
     return isInstruction(s)
         && (
@@ -124,6 +105,23 @@ function isYieldInstruction(s: ts.Node): s is InstructionNode<'4' | '5'> {
             || s.expression.elements![0].text === '5'
         );
 }
+
+function mapReturnInsturctions(node: ts.Node, context: ts.TransformationContext): ts.Node {
+    const factory: ts.NodeFactory = context.factory
+    function visit(node: ts.Node): ts.Node {
+        const ret = ts.visitEachChild(node, visit, context);
+        if (isReturnInstruction(ret)) {
+            if (ret.expression.elements.length === 2) {
+                return factory.createReturnStatement(ret.expression.elements[1])
+            } else {
+                return factory.createReturnStatement();
+            }
+        }
+        return ret;
+    }
+    return ts.visitEachChild(node, visit, context);
+}
+
 
 function isSectionFallthrough(s: ts.Node): s is ts.ExpressionStatement {
     return ts.isExpressionStatement(s)
@@ -134,21 +132,43 @@ function isSectionFallthrough(s: ts.Node): s is ts.ExpressionStatement {
         && s.expression.left.name.text === "label";
 }
 
+const removeSectionFallthrough = makeRemoveExpressionOfType(isSectionFallthrough);
+
+interface TryCatchInfo extends ts.ExpressionStatement {
+    expression: {
+        expression: {
+            name: { escapedText: 'push' } & ts.Identifier;
+            expression: {
+                name: { escapedText: 'trys' } & ts.Identifier
+            } & ts.PropertyAccessExpression;
+        } & ts.PropertyAccessExpression,
+        arguments: [ts.ArrayLiteralExpression]
+    } & Omit<ts.CallExpression, 'arguments'>;
+}
+function isTryCatchInfo(node: ts.Node): node is TryCatchInfo {
+    return ts.isExpressionStatement(node)
+        && ts.isCallExpression(node.expression)
+        && ts.isPropertyAccessExpression(node.expression.expression)
+        && node.expression.expression.name.escapedText == 'push'
+        && ts.isPropertyAccessExpression(node.expression.expression.expression)
+        && node.expression.expression.expression.name.escapedText == 'trys'
+        && ts.isArrayLiteralExpression(node.expression.arguments[0])
+
+}
+const removeTryCatchInfo = makeRemoveExpressionOfType(isTryCatchInfo);
 
 function getGenerateBody(statments: ts.Statement[], factory: ts.NodeFactory): ts.Statement[] {
     return statments.map(x => {
+        console.log('getGenerateBody statments', ts.SyntaxKind[x.kind]);
         if (ts.isReturnStatement(x)
             && x.expression
             && isParenthesizedNamedCallExpression('__generator', x.expression)
         ) {
             const generateBody = (x.expression.arguments[1] as ts.FunctionLikeDeclaration).body!;
-            console.log('generateBody', ts.SyntaxKind[generateBody.kind]);
             if (ts.isArrayLiteralExpression(generateBody)) {
-                console.log('??--')
                 return factory.createReturnStatement(generateBody);
             }
             if (ts.isBlock(generateBody)) {
-                console.log('????');
                 return generateBody;
             }
             console.assert(true, `generateBody ${ts.SyntaxKind[generateBody.kind]}`);
@@ -190,7 +210,6 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 && _node.arguments.length === 2
                 && ts.isFunctionLike(_node.arguments[1])
             ) {
-                console.log('!!! ');
                 const transFormed = ts.visitEachChild(_node, updateInstruction, context);
                 const generateBody = transFormed.arguments[1] as ts.FunctionLikeDeclaration;
                 console.assert(ts.isFunctionLike(transFormed.arguments[1]), '???');
@@ -221,23 +240,32 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                         && ts.isConditionalExpression(x.expression)
                 })
             ) {
-                console.log('check for labels !!!', labels);
                 const transFormed: typeof _node = ts.visitEachChild(_node, updateInstruction, context);
                 const statements = transFormed.statements.reduce((pre, x) => {
+                    // this may be a if statement
                     if (ts.isReturnStatement(x)
                         && x.expression
                         && ts.isConditionalExpression(x.expression)
                     ) {
+                        console.log('expand return',
+                            ts.SyntaxKind[x.expression.whenTrue.kind],
+                            ts.SyntaxKind[x.expression.whenFalse.kind],
+                        );
+                        // const whenTrueStatements = ts.visitEachChild(x.expression.whenTrue, updateInstruction, context);
                         pre.push(
                             factory.createIfStatement(
                                 x.expression.condition,
-                                factory.createBlock([
-                                    factory.createReturnStatement(x.expression.whenTrue),
-                                ])
+                                updateInstruction((transformExpandStatement(context))(factory.createBlock(
+                                    expandStatements([
+                                        factory.createReturnStatement(x.expression.whenTrue),
+                                    ], factory)
+                                ) as unknown as ts.SourceFile)) as unknown as ts.Block,
+                                updateInstruction((transformExpandStatement(context))(factory.createBlock(
+                                    expandStatements([
+                                        factory.createReturnStatement(x.expression.whenFalse),
+                                    ], factory)
+                                ) as unknown as ts.SourceFile)) as unknown as ts.Block
                             ),
-                            factory.createReturnStatement(
-                                x.expression.whenFalse
-                            )
                         );
                         return pre;
                     }
@@ -247,22 +275,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 return factory.updateBlock(transFormed as typeof _node, statements)
             }
 
-            if (ts.isReturnStatement(_node)
-                && _node.expression
-            ) {
-                console.log("isReturnStatement", ts.SyntaxKind[_node.expression.kind]);
-                if (ts.isArrayLiteralExpression(_node.expression)) {
-                    if (ts.isNumericLiteral(_node.expression.elements[0])) {
-                        const instruction = getInstructionName(parseInt(_node.expression.elements[0].text));
-                        console.log('instruction', instruction);
-                        // ts.addSyntheticTrailingComment(_node.expression.elements[0],
-                        //     ts.SyntaxKind.MultiLineCommentTrivia,
-                        //     getInstructionName(Number(_node.expression.elements[0].getText())), false);
-                    }
-                }
-            }
             if (ts.isCaseClause(_node)) {
-                console.log('case', labels);
                 // dont process recursive case clauses
                 labels.push(_node.expression.getText());
                 const transFormed: typeof _node = ts.visitEachChild(_node, updateInstruction, context);
@@ -297,39 +310,32 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                         section.hasYield = true;
                         console.assert(isBlockLike(node.parent), 'container must be blocklike');
                         section.yieldContainer = node.parent as ts.BlockLike;
-                        section.topYield = section.yieldContainer == sectionRoot;
-                        console.log('yield container', !!node.parent);
+                        section.topYield = section.yieldContainer == sectionRoot.statements[0];
+
                     }
                     if (instruction === 'return') {
                         section.hasReturn = true;
                     }
                     if (instruction === 'break') {
                         section.hasBreak = true;
-                        const breakLabel = node.expression.elements[1].getText();
-                        console.log('===> section.index', parseInt(section.index), parseInt(breakLabel), parseInt(breakLabel) < parseInt(section.index));
+                        const breakLabel = (node.expression.elements[1] as ts.NumericLiteral).text;
+                        // console.log('===> section.index', parseInt(section.index), parseInt(breakLabel), parseInt(breakLabel) < parseInt(section.index));
                         if (parseInt(breakLabel) < parseInt(section.index)) {
-                            console.log('is breakback');
+                            // console.log('is breakback');
                         }
                         if (parseInt(breakLabel) > parseInt(section.index) + 1) {
-                            console.log('is breakforward');
+                            // console.log('is breakforward');
                         }
                     }
                 }
 
-                if (ts.isCallExpression(node)
-                    && ts.isPropertyAccessExpression(node.expression)
-                    && node.expression.name.getText() == 'push'
-                    && ts.isPropertyAccessExpression(node.expression.expression)
-                    && node.expression.expression.name.getText() == 'trys'
-                    && ts.isArrayLiteralExpression(node.arguments[0])
-                ) {
-                    trycatch = node.arguments[0].elements.map(a => {
+                if (isTryCatchInfo(node)) {
+                    trycatch = node.expression.arguments[0].elements.map(a => {
                         if (ts.isNumericLiteral(a)) {
                             return parseInt(a.text);
                         }
                         return -1;
                     });
-                    console.log('found trys', trycatch);
                 }
 
                 return node;
@@ -351,7 +357,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
             section.statements = [...statements];
             ts.visitEachChild(sectionRoot, loadSectionInfo, context);
 
-            console.log('trycatch', trycatch);
+
             if (trycatch.length > 0) {
                 section.tryCatch = trycatch;
             }
@@ -362,7 +368,6 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
         function joinYields(sections: AwaitSection[]) {
             return sections.reduce((pre, current, index) => {
                 if (current.merged) {
-                    console.log('skip merged block');
                     return pre;
                 }
                 if (current.hasYield) {
@@ -374,7 +379,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     }
 
                     const lastExpresion = current.statements[current.statements.length - 1] as InstructionNode<string>;
-                    console.log('lastExpresion', ts.SyntaxKind[lastExpresion.kind]);
+
                     console.assert(isInstruction(lastExpresion), `code ${ts.createPrinter().printNode(ts.EmitHint.Unspecified, lastExpresion, factory.createSourceFile(
                         current.statements,
                         factory.createToken(ts.SyntaxKind.EndOfFileToken),
@@ -382,7 +387,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     )
                     )}`);
 
-                    console.log('current.tryCatch, next.tryCatch', current.tryCatch, next.tryCatch);
+
                     if (current.topYield) {
                         pre.push({
                             ...current,
@@ -398,11 +403,6 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                             ]
                         });
                     } else {
-                        console.log('current.yieldContainer',
-                            ts.SyntaxKind[current.yieldContainer.kind],
-                            !!current.yieldContainer.parent,
-                        );
-
                         pre.push({
                             ...current,
                             hasYield: false,
@@ -410,7 +410,9 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                             tryCatch: current.tryCatch || next.tryCatch,
                             statements: [
                                 ...current.statements.map(s => {
-                                    return replaceExpression(s, (node) => node === current.yieldContainer,
+                                    return replaceExpression(s, (node) => {
+                                        return node === current.yieldContainer
+                                    },
                                         updateBlocklike(
                                             current.yieldContainer,
                                             current.yieldContainer.statements.reduce((pre, current) => {
@@ -444,14 +446,23 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
 
 
         function joinTry(sections: AwaitSection[]): AwaitSection[] {
-            console.log('before join trys', sections.length);
-
+            function removeToTryEnd(node: ts.Node, end: number) {
+                function visit(node: ts.Node): ts.Node {
+                    const transformed = ts.visitEachChild(node, visit, context);
+                    if (isBreakInstruction(transformed)) {
+                        const label = parseInt(transformed.expression.elements[1].text);
+                        if (label == end) {
+                            return factory.createEmptyStatement();
+                        }
+                    }
+                    return transformed;
+                }
+                return ts.visitEachChild(node, visit, context);
+            }
             return sections.reduce((pre, current, index) => {
                 if (current.merged) {
-                    console.log('skip merged block');
                     return pre;
                 }
-                console.log('trycatch', current.tryCatch);
                 if (current.tryCatch && current.tryCatch.length > 0) {
                     const tryBlock = sections.filter(s => (parseInt(s.index) >= current.tryCatch![0]) && (parseInt(s.index) < current!.tryCatch![1]));
                     const catchBlock = sections.filter(s => (parseInt(s.index) >= current.tryCatch![1] && parseInt(s.index) < (current!.tryCatch![2] || current!.tryCatch![3])));
@@ -466,29 +477,30 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     finallyBlock.forEach(f => {
                         f.merged = true;
                     });
-
+                    const catchName = (((catchBlock[0].statements[0] as ts.ExpressionStatement).expression as ts.BinaryExpression).left as ts.Identifier).text;
                     pre.push({
                         ...current,
                         tryCatch: undefined,
                         statements: [
-                            factory.createTryStatement(
-                                factory.createBlock(
-                                    tryBlock.reduce((pre, s) => pre.concat(s.statements), [] as ts.Statement[]),
-                                ),
+                            removeToTryEnd(factory.createTryStatement(
+                                removeTryCatchInfo(
+                                    factory.createBlock(
+                                        tryBlock.reduce((pre, s) => pre.concat(s.statements), [] as ts.Statement[]),
+                                    ), context) as ts.Block,
                                 factory.createCatchClause(
                                     factory.createVariableDeclaration(
-                                        factory.createIdentifier('e'),
+                                        factory.createIdentifier(catchName),
                                         undefined,
                                         undefined,
                                     ),
                                     factory.createBlock(
-                                        catchBlock.reduce((pre, s) => pre.concat(s.statements), [] as ts.Statement[]),
+                                        catchBlock.reduce((pre, s) => pre.concat(!pre.length ? s.statements.slice(1) : s.statements), [] as ts.Statement[]),
                                     ),
                                 ),
                                 finallyBlock.length > 0 ? factory.createBlock(
                                     finallyBlock.map(f => f.statements[0]),
                                 ) : undefined,
-                            )
+                            ), current.tryCatch[3]),
                         ] as ts.Statement[],
                     });
 
@@ -499,11 +511,16 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
             }, [] as AwaitSection[]);
         }
 
+        function joinIf(sections: AwaitSection[]): AwaitSection[] {
+            return sections.reduce((pre, current, index) => {
+                if (current.merged) {
+                    return pre;
+                }
+                pre.push(current);
+                return pre;
+            }, [] as AwaitSection[]);
+        }
         function joinSections() {
-            console.log('before joinSections', sections.length);
-            sections.map(s => {
-                console.log('section', s.index, s.tryCatch);
-            });
             const noYields = joinYields(sections);
             return joinTry(noYields);
         }
@@ -564,7 +581,6 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
 
             const { labels, updateInstruction, joinSections } = getUpdateInstruction();
             const asyncFunction = ts.visitEachChild(_node, updateInstruction, context);
-            console.log('found labels ', labels);
 
             const body: ts.Statement[] = [];
 
@@ -574,25 +590,17 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
             if (!labels.length) {
                 const generateBody = getGenerateBody(awaiterBody, factory);
                 body.push(
-                    ...generateBody.slice(0, -1),
-                    ...makeStatementFromInstuction(generateBody[generateBody.length - 1] as InstructionNode<string>, factory)
+                    ...generateBody,
                 );
             } else {
                 const sections = joinSections();
-                console.log('after join sections', sections.length);
-
+                body.push(...awaiterBody.slice(0, -1));
                 sections.forEach(s => {
-                    console.log('section.statements', s.statements.length, body.length, s.index);
-                    body.push(...s.statements.reduce((pre, s) => {
-                        if (isInstruction(s)) {
-                            pre.push(...makeStatementFromInstuction(s, factory));
-                        } else {
-                            pre.push(s);
-                        }
-                        return pre;
-                    }, [] as ts.Statement[]));
+                    const node = factory.createEmptyStatement() ;
+                    ts.addSyntheticLeadingComment(node, ts.SyntaxKind.MultiLineCommentTrivia, `label ${s.index}`, true);
+                    body.push(node);
+                    body.push(...s.statements);
                 });
-
             }
 
             body.forEach((s, i, total) => {
@@ -605,6 +613,8 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 factory.createModifier(ts.SyntaxKind.AsyncKeyword),
             ];
 
+            const transformed = removeSectionFallthrough(mapReturnInsturctions(factory.createBlock(body), context), context) as ts.Block;
+
             if (ts.isFunctionDeclaration(transformedNode)) {
                 return factory.createFunctionDeclaration(
                     transformedNode.decorators,
@@ -614,7 +624,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     transformedNode.typeParameters,
                     transformedNode.parameters,
                     transformedNode.type,
-                    factory.createBlock(body)
+                    transformed
                 );
             }
             if (ts.isFunctionExpression(transformedNode)) {
@@ -625,7 +635,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     transformedNode.typeParameters,
                     transformedNode.parameters,
                     transformedNode.type,
-                    factory.createBlock(body)
+                    transformed
                 );
             }
             if (ts.isArrowFunction(transformedNode)) {
@@ -635,7 +645,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     transformedNode.parameters,
                     transformedNode.type,
                     transformedNode.equalsGreaterThanToken,
-                    factory.createBlock(body)
+                    transformed
                 );
             }
             if (ts.isMethodDeclaration(transformedNode)) {
@@ -648,7 +658,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     transformedNode.typeParameters,
                     transformedNode.parameters,
                     transformedNode.type,
-                    factory.createBlock(body)
+                    transformed
                 );
             }
             return asyncFunction;
@@ -826,5 +836,108 @@ const scaffold = function (e, t) {
     });
 
 `;
-    testTransformer(source1, [fixAsyncAwait]);
+    // misc condition
+    const source4 = `
+const insert = function () {
+    return (0, n.__awaiter)(this, undefined, undefined, function () {
+      let e;
+      let t;
+      let a;
+      let l;
+      let i;
+      let o;
+      let r;
+      return (0, n.__generator)(this, function (n) {
+        switch (n.label) {
+          case 0: {
+            e = this.store;
+            return (t = e.selectedInsertRendererInfo)
+              ? ((a = e.insertId),
+                (l = e.insertRegion),
+                (i = e.insertBeforeId),
+                (o = t.scaffold || { type: t.type }),
+                t.scaffoldForm ? [4, this.scaffold(t.scaffoldForm, o)] : [3, 2])
+              : [2];
+          }
+          case 1: {
+            o = n.sent();
+            n.label = 2;
+          }
+          case 2: {
+            if ((r = this.addChild(a, l, o, i, t))) {
+              e.closeInsertPanel();
+              setTimeout(() => {
+                e.setActiveId(r.$$id);
+              }, 100);
+            }
+            return [2];
+          }
+        }
+      });
+    });
+  };
+`;
+
+    // if
+    const source5 = `
+const drop = function (e) {
+    return (0, n.__awaiter)(this, undefined, undefined, function () {
+      let e, t, a, i, o, r;
+      return (0, n.__generator)(this, function (n) {
+        switch (n.label) {
+          case 0: {
+            e = this.store;
+            t = this.dndMode.getDropBeforeId();
+            return "move" !== e.dragMode
+              ? [3, 1]
+              : (this.manager.move(e.dropId, e.dropRegion, e.dragId, t),
+                [3, 4]);
+          }
+          case 1: {
+            return "copy" !== e.dragMode
+              ? [3, 4]
+              : ((a = e.dragSchema),
+                (i = e.dropId),
+                (o = e.dropRegion),
+                (r = undefined),
+                "subrenderer" !== e.dragType
+                  ? [3, 3]
+                  : (
+                      null ==
+                      (r = (0, l.default)(
+                        e.subRenderers,
+                        ({ id }) => id === e.dragId,
+                      ))
+                        ? undefined
+                        : r.scaffoldForm
+                    )
+                  ? [4, this.manager.scaffold(r.scaffoldForm, a)]
+                  : [3, 3]);
+          }
+          case 2: {
+            a = n.sent();
+            n.label = 3;
+          }
+          case 3: {
+            this.manager.addChild(i, o, a, t, r, {
+              id: e.dragId,
+              type: e.dragType,
+              data: e.dragSchema,
+            });
+            n.label = 4;
+          }
+          case 4: {
+            return [2];
+          }
+        }
+      });
+    });
+}
+`;
+
+    // testTransformer(source, [fixAsyncAwait]);
+    // testTransformer(source1, [fixAsyncAwait]);
+    // testTransformer(source2, [fixAsyncAwait]);
+    // testTransformer(source3, [fixAsyncAwait]);
+    testTransformer(source5, [fixAsyncAwait]);
 }

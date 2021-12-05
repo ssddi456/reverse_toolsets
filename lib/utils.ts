@@ -3,8 +3,6 @@ import * as ts from "typescript";
 import * as fs from "fs";
 import { createSourceFile } from "./compiler";
 import { VisitResult } from "typescript";
-import { Node } from "./CompilerApi";
-import { transformSpreadAssignmentCall } from "./isSpreadAssignmentCall";
 
 export function findNeareastParentWithType(
     target: ts.Node,
@@ -312,4 +310,20 @@ export function updateBlocklike(node: ts.BlockLike, statements: ts.Statement[], 
     } else {
         throw new Error('unexpected node type');
     }
+}
+
+export function makeRemoveExpressionOfType(test: (node: ts.Node) => boolean) {
+    return (node: ts.Node, context: ts.TransformationContext) => {
+        const factory = context.factory
+        function _transformer(node: ts.Node) {
+            const transformedNode: ts.Node = ts.visitEachChild(node, _transformer, context);
+
+            if (test(transformedNode)) {
+                return factory.createEmptyStatement();
+            }
+
+            return transformedNode;
+        }
+        return ts.visitEachChild(node, _transformer, context);
+    };
 }

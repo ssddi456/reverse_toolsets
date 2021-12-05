@@ -116,13 +116,10 @@ export function expandStatements(statements: ts.Statement[], factory: ts.NodeFac
                     s.expression
                     && ts.isParenthesizedExpression(s.expression)
                 ) {
-                    console.log('parenthesized');
                     const temp: ts.Statement[] = [];
                     expandCommaExpression(s.expression.expression, temp, factory);
-                    console.log('temp', temp.length)
                     pre.push(...expandStatements(temp, factory));
                 } else {
-                    console.log('wtff??', ts.SyntaxKind[s.expression.kind]);
                     pre.push(s);
                 }
             } else if (ts.isReturnStatement(s)
@@ -132,6 +129,7 @@ export function expandStatements(statements: ts.Statement[], factory: ts.NodeFac
                     ts.isBinaryExpression(s.expression)
                     && s.expression.operatorToken.kind === ts.SyntaxKind.CommaToken
                 ) {
+                    console.log('binarry ,');
                     const temp: ts.Statement[] = [];
                     temp.unshift(
                         factory.updateReturnStatement(s, s.expression.right)
