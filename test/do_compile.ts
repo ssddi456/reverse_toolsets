@@ -45,7 +45,9 @@ const a = async (a) => {
 }
 async function a() {
 }
+
 (row || col)?.length
+l.default(e.subRenderers, ({ id }) => id === e.dragId)?.xxxx
 `;
 
 const source2 = `
@@ -70,7 +72,52 @@ async function test () {
     t? (some, await s.prompt([])): (22, await this.editor.focus());
 }
 `;
-let result = ts.transpileModule(source1, {
+const source4 = `
+async function test () {
+    if (x) {
+        console.log(1);
+    } else if (y) {
+        await console.log(2);
+    } else {
+        console.log(3);
+    }
+}
+async function test () {
+    if (x) {
+        console.log(1);
+    } else if (z){
+        if (e.dragType == "subrenderer" ?? some){
+            await console.log(3);
+        } else {
+            console.log(2);
+        }
+    } else {
+        console.log(4)
+    }
+}
+
+async function test () {
+    if (x) {
+        await console.log(1);
+    }
+}
+
+async function test () {
+    if (!x) {
+        console.log(2);
+    } else {
+        await console.log(1);
+    }
+}
+async function test () {
+    if (!x) {
+        await console.log(2);
+    } else {
+        console.log(1);
+    }
+}
+    `;
+let result = ts.transpileModule(source4, {
     compilerOptions: {
         module: ts.ModuleKind.CommonJS,
         noEmitHelpers: true,

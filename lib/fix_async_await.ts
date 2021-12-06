@@ -190,6 +190,7 @@ interface AwaitSection {
     isBlank: boolean;
     index: string;
     tryCatch?: number[]; // [try, catch, finally, next]
+    breakTo: string[];
     hasBreak: boolean;
     hasReceiveAwait: boolean;
     hasReturn: boolean;
@@ -242,7 +243,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
             ) {
                 const transFormed: typeof _node = ts.visitEachChild(_node, updateInstruction, context);
                 const statements = transFormed.statements.reduce((pre, x) => {
-                    // this may be a if statement
+                    // this is a if statement
                     if (ts.isReturnStatement(x)
                         && x.expression
                         && ts.isConditionalExpression(x.expression)
@@ -251,20 +252,32 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                             ts.SyntaxKind[x.expression.whenTrue.kind],
                             ts.SyntaxKind[x.expression.whenFalse.kind],
                         );
-                        // const whenTrueStatements = ts.visitEachChild(x.expression.whenTrue, updateInstruction, context);
+                        const whenTrueStatements = (updateInstruction((transformExpandStatement(context))(factory.createBlock(
+                            expandStatements([
+                                factory.createReturnStatement(x.expression.whenTrue),
+                            ], factory)
+                        ) as unknown as ts.SourceFile)) as unknown as ts.Block).statements;
+                        const whenFalseStatements = (updateInstruction((transformExpandStatement(context))(factory.createBlock(
+                            expandStatements([
+                                factory.createReturnStatement(x.expression.whenFalse),
+                            ], factory)
+                        ) as unknown as ts.SourceFile)) as unknown as ts.Block).statements;
+                        const whenTrueLast = whenTrueStatements[whenTrueStatements.length - 1];
+                        const whenFalseLast = whenFalseStatements[whenFalseStatements.length - 1];
+                        if (isInstruction(whenTrueLast)
+                            && isInstruction(whenFalseLast)
+                        ) {
+                            console.log('async await if');
+                        }
                         pre.push(
                             factory.createIfStatement(
                                 x.expression.condition,
-                                updateInstruction((transformExpandStatement(context))(factory.createBlock(
-                                    expandStatements([
-                                        factory.createReturnStatement(x.expression.whenTrue),
-                                    ], factory)
-                                ) as unknown as ts.SourceFile)) as unknown as ts.Block,
-                                updateInstruction((transformExpandStatement(context))(factory.createBlock(
-                                    expandStatements([
-                                        factory.createReturnStatement(x.expression.whenFalse),
-                                    ], factory)
-                                ) as unknown as ts.SourceFile)) as unknown as ts.Block
+                                factory.createBlock(
+                                    whenTrueStatements
+                                ),
+                                factory.createBlock(
+                                    whenFalseStatements
+                                )
                             ),
                         );
                         return pre;
@@ -291,6 +304,8 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 index: sectionRoot.expression.getText(),
             } as AwaitSection;
             let trycatch: number[] = [];
+            let breakTo: string[] = [];
+
             function loadSectionInfo(node: ts.Node): ts.Node {
                 // fix parent;
                 ts.visitEachChild(node, function (child) {
@@ -319,6 +334,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     if (instruction === 'break') {
                         section.hasBreak = true;
                         const breakLabel = (node.expression.elements[1] as ts.NumericLiteral).text;
+                        breakTo.push(breakLabel)
                         // console.log('===> section.index', parseInt(section.index), parseInt(breakLabel), parseInt(breakLabel) < parseInt(section.index));
                         if (parseInt(breakLabel) < parseInt(section.index)) {
                             // console.log('is breakback');
@@ -361,6 +377,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
             if (trycatch.length > 0) {
                 section.tryCatch = trycatch;
             }
+            section.breakTo = breakTo;
             return section;
         }
 
@@ -468,6 +485,10 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                     const catchBlock = sections.filter(s => (parseInt(s.index) >= current.tryCatch![1] && parseInt(s.index) < (current!.tryCatch![2] || current!.tryCatch![3])));
                     const finallyBlock = current.tryCatch![2] ? sections.filter(s => (parseInt(s.index) >= current.tryCatch![2] && parseInt(s.index) < current!.tryCatch![3])) : [];
 
+                    if (tryBlock.length > 1 || catchBlock.length > 1) {
+                        pre.push(current);
+                        return pre;
+                    }
                     tryBlock.slice(1).forEach(t => {
                         t.merged = true;
                     });
@@ -516,13 +537,81 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 if (current.merged) {
                     return pre;
                 }
+                const next = sections[index + 1];
+                const nextLabel = next?.index;
+                current.statements.forEach(s => {
+                    function visitor(node: ts.Node): ts.Node {
+                        if (ts.isIfStatement(node)
+                            && ts.isBlock(node.thenStatement)
+                            && isInstruction(node.thenStatement.statements.slice(-1)[0])
+                            && node.elseStatement
+                            && ts.isBlock(node.elseStatement)
+                            && isInstruction(node.elseStatement.statements.slice(-1)[0])
+                        ) {
+                            const thenLast = node.thenStatement.statements.slice(-1)[0];
+                            const elseLast = node.elseStatement.statements.slice(-1)[0];
+
+                            if (isBreakInstruction(thenLast)) {
+                                // do something here
+                                const thenLabel = thenLast.expression.elements[1].text; // next section index, just remove this?
+                                console.log('thenLabel', thenLabel);
+                            }
+                            if (isBreakInstruction(elseLast)) {
+                                // do something here
+                                const elseLabel = elseLast.expression.elements[1].text; // current section
+                                console.log('elseLabel', elseLabel);
+                            }
+
+                            return ts.visitEachChild(node, visitor, context);
+                        }
+                        return ts.visitEachChild(node, visitor, context);
+                    }
+
+                    ts.visitEachChild(s, visitor, context);
+
+                });
                 pre.push(current);
                 return pre;
             }, [] as AwaitSection[]);
         }
+
+        function hasBreak(sections: AwaitSection[]): boolean {
+            try {
+                sections.some(s => s.statements.some(s => {
+                    function visitor(node: ts.Node): ts.Node {
+                        if (isBreakInstruction(node)) {
+                            throw { breakFlag: true };
+                        }
+                        return ts.visitEachChild(node, visitor, context);
+                    }
+                    ts.visitEachChild(s, visitor, context);
+                }));
+            } catch (error: any) {
+                if (error.breakFlag) {
+                    return true;
+                } else {
+                    throw error;
+                }
+            }
+            return false;
+        }
         function joinSections() {
-            const noYields = joinYields(sections);
-            return joinTry(noYields);
+            sections.forEach(s => {
+                console.log('from',  s.index, 'to', s.breakTo );
+            });
+
+            let _sections = joinYields(sections);
+            let count = 0;
+            while (hasBreak(_sections)) {
+                _sections = joinTry(_sections);
+                _sections = joinIf(_sections);
+                count += 1;
+                if (count > 10) {
+                    break;
+                }
+            }
+
+            return _sections;
         }
         return {
             labels,
@@ -596,7 +685,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 const sections = joinSections();
                 body.push(...awaiterBody.slice(0, -1));
                 sections.forEach(s => {
-                    const node = factory.createEmptyStatement() ;
+                    const node = factory.createEmptyStatement();
                     ts.addSyntheticLeadingComment(node, ts.SyntaxKind.MultiLineCommentTrivia, `label ${s.index}`, true);
                     body.push(node);
                     body.push(...s.statements);
