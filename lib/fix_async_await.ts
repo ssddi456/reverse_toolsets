@@ -88,14 +88,19 @@ function isReturnInstruction(s: ts.Node): s is InstructionNode<'2'> {
     return isInstruction(s)
         && s.expression.elements![0].text === '2';
 }
-
-function isBreakInstruction(s: ts.Node): s is {
+interface BreakInstruction extends Omit<InstructionNode<'3'>, 'expression'> {
     expression: {
         elements: [InstructionTypeNode<'3'>, ts.NumericLiteral]
     }
-} & InstructionNode<'3'> {
+}
+
+function isBreakInstruction(s: ts.Node): s is BreakInstruction {
     return isInstruction(s)
         && s.expression.elements![0].text === '3';
+}
+
+function getBreakInstructionLabel(s: BreakInstruction): number {
+    return parseInt(s.expression.elements[1].text);
 }
 
 function isYieldInstruction(s: ts.Node): s is InstructionNode<'4' | '5'> {
@@ -157,6 +162,50 @@ function isTryCatchInfo(node: ts.Node): node is TryCatchInfo {
 }
 const removeTryCatchInfo = makeRemoveExpressionOfType(isTryCatchInfo);
 
+interface BrFalse extends ts.IfStatement {
+    expression: {
+        operatorToken: ts.Token<ts.SyntaxKind.ExclamationEqualsEqualsToken>;
+    } & ts.BinaryExpression | ({ operator: ts.SyntaxKind.ExclamationToken } & ts.PrefixUnaryExpression);
+    thenStatement: {
+        statements: [BreakInstruction]
+    } & ts.Block;
+}
+
+function isBrFalse(node: ts.Node): node is BrFalse {
+    return ts.isIfStatement(node)
+        && (
+            (
+                ts.isPrefixUnaryExpression(node.expression)
+                && node.expression.operator === ts.SyntaxKind.ExclamationToken
+            )
+            || (
+                ts.isBinaryExpression(node.expression)
+                && node.expression.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken
+            )
+        )
+        && ts.isBlock(node.thenStatement)
+        && node.thenStatement.statements.length === 1
+        && isBreakInstruction(node.thenStatement.statements[0]);
+}
+
+interface BrTrue extends ts.IfStatement {
+    expression: {
+        operatorToken: ts.Token<ts.SyntaxKind.EqualsEqualsEqualsToken>;
+    } & ts.BinaryExpression;
+    thenStatement: {
+        statements: [BreakInstruction]
+    } & ts.Block;
+}
+
+function isBrTrue(node: ts.Node): node is BrTrue {
+    return ts.isIfStatement(node)
+        && ts.isBinaryExpression(node.expression)
+        && node.expression.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+        && ts.isBlock(node.thenStatement)
+        && node.thenStatement.statements.length === 1
+        && isBreakInstruction(node.thenStatement.statements[0]);
+}
+
 function getGenerateBody(statments: ts.Statement[], factory: ts.NodeFactory): ts.Statement[] {
     return statments.map(x => {
         console.log('getGenerateBody statments', ts.SyntaxKind[x.kind]);
@@ -194,6 +243,7 @@ interface AwaitSection {
     hasBreak: boolean;
     hasReceiveAwait: boolean;
     hasReturn: boolean;
+    hasLoop: boolean;
     statements: ts.Statement[];
 }
 
@@ -248,10 +298,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                         && x.expression
                         && ts.isConditionalExpression(x.expression)
                     ) {
-                        console.log('expand return',
-                            ts.SyntaxKind[x.expression.whenTrue.kind],
-                            ts.SyntaxKind[x.expression.whenFalse.kind],
-                        );
+
                         const whenTrueStatements = (updateInstruction((transformExpandStatement(context))(factory.createBlock(
                             expandStatements([
                                 factory.createReturnStatement(x.expression.whenTrue),
@@ -269,16 +316,15 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                         ) {
                             console.log('async await if');
                         }
+
                         pre.push(
                             factory.createIfStatement(
                                 x.expression.condition,
                                 factory.createBlock(
                                     whenTrueStatements
                                 ),
-                                factory.createBlock(
-                                    whenFalseStatements
-                                )
                             ),
+                            ...whenFalseStatements
                         );
                         return pre;
                     }
@@ -338,6 +384,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                         // console.log('===> section.index', parseInt(section.index), parseInt(breakLabel), parseInt(breakLabel) < parseInt(section.index));
                         if (parseInt(breakLabel) < parseInt(section.index)) {
                             // console.log('is breakback');
+                            section.hasLoop = true;
                         }
                         if (parseInt(breakLabel) > parseInt(section.index) + 1) {
                             // console.log('is breakforward');
@@ -541,34 +588,36 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 const nextLabel = next?.index;
                 current.statements.forEach(s => {
                     function visitor(node: ts.Node): ts.Node {
-                        if (ts.isIfStatement(node)
-                            && ts.isBlock(node.thenStatement)
-                            && isInstruction(node.thenStatement.statements.slice(-1)[0])
-                            && node.elseStatement
-                            && ts.isBlock(node.elseStatement)
-                            && isInstruction(node.elseStatement.statements.slice(-1)[0])
-                        ) {
-                            const thenLast = node.thenStatement.statements.slice(-1)[0];
-                            const elseLast = node.elseStatement.statements.slice(-1)[0];
+                        if (isBrFalse(node)) {
+                            const breakLabel = getBreakInstructionLabel(node.thenStatement.statements[0]);
+                            const breakToLabelSectionIndex = sections.findIndex(s => parseInt(s.index) == breakLabel);
+                            const beforeBreakToLabelSection = sections[breakToLabelSectionIndex - 1];
+                            const lastExpresion = beforeBreakToLabelSection.statements.slice(-1)[0];
 
-                            if (isBreakInstruction(thenLast)) {
-                                // do something here
-                                const thenLabel = thenLast.expression.elements[1].text; // next section index, just remove this?
-                                console.log('thenLabel', thenLabel);
-                            }
-                            if (isBreakInstruction(elseLast)) {
-                                // do something here
-                                const elseLabel = elseLast.expression.elements[1].text; // current section
-                                console.log('elseLabel', elseLabel);
-                            }
+                            console.log('node is brfalse !', current.index, breakLabel, !!lastExpresion, isBreakInstruction(lastExpresion));
+                            if (isBreakInstruction(lastExpresion)) {
+                                const resultLabel = getBreakInstructionLabel(lastExpresion);
+                                console.log('result label is ', resultLabel);
 
-                            return ts.visitEachChild(node, visitor, context);
+                                const thenSection = sections.filter(s => (parseInt(s.index) >= breakLabel) && (parseInt(s.index) < resultLabel));
+                                console.log('then section is ', thenSection.length);
+                                const elseSection = sections.filter(s => (parseInt(s.index) > parseInt(current.index)) && (parseInt(s.index) < breakLabel));
+                                console.log('else section is ', elseSection.length);
+
+                                if (thenSection.length <= 1 && elseSection.length <= 1) {
+                                    console.log('then section is ', thenSection.length);
+                                    console.log('else section is ', elseSection.length);
+                                    // build if | else here
+                                }
+                            }
                         }
+                        if (isBrTrue(node)) {
+                            console.log('node is brtrue !', current.index, getBreakInstructionLabel(node.thenStatement.statements[0]));
+                        }
+
                         return ts.visitEachChild(node, visitor, context);
                     }
-
-                    ts.visitEachChild(s, visitor, context);
-
+                    visitor(s);
                 });
                 pre.push(current);
                 return pre;
@@ -597,7 +646,10 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
         }
         function joinSections() {
             sections.forEach(s => {
-                console.log('from',  s.index, 'to', s.breakTo );
+                console.log('from', s.index, 'to', s.breakTo);
+                if (s.hasLoop) {
+                    throw new Error("not support loop");
+                }
             });
 
             let _sections = joinYields(sections);
