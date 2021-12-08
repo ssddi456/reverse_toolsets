@@ -1,5 +1,6 @@
 // Error.stackTraceLimit = Infinity;
 
+import { IfStatement } from "ts-morph";
 import * as ts from "typescript";
 import { expandStatements, transformExpandStatement } from "./fix_block";
 import { isBlockLike, isParenthesizedNamedCallExpression, replaceExpression, testTransformer, updateBlocklike, makeRemoveExpressionOfType } from "./utils";
@@ -170,7 +171,7 @@ interface BrFalse extends ts.IfStatement {
         statements: [BreakInstruction]
     } & ts.Block;
 }
-
+// if (! ) break elseLabel
 function isBrFalse(node: ts.Node): node is BrFalse {
     return ts.isIfStatement(node)
         && (
@@ -186,6 +187,19 @@ function isBrFalse(node: ts.Node): node is BrFalse {
         && ts.isBlock(node.thenStatement)
         && node.thenStatement.statements.length === 1
         && isBreakInstruction(node.thenStatement.statements[0]);
+}
+
+/** reverse the condition of a brfalse */
+function positiveExpression(node: ts.PrefixUnaryExpression | ts.BinaryExpression, factory: ts.NodeFactory): ts.Expression {
+    if (ts.isPrefixUnaryExpression(node)) {
+        return node.operand;
+    } else {
+        return factory.createBinaryExpression(
+            node.left,
+            factory.createToken(ts.SyntaxKind.EqualsEqualsEqualsToken),
+            node.right
+        );
+    }
 }
 
 interface BrTrue extends ts.IfStatement {
@@ -580,47 +594,104 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
         }
 
         function joinIf(sections: AwaitSection[]): AwaitSection[] {
-            return sections.reduce((pre, current, index) => {
+            return sections.reduce((preSection, current, index) => {
                 if (current.merged) {
-                    return pre;
+                    return preSection;
                 }
                 const next = sections[index + 1];
                 const nextLabel = next?.index;
-                current.statements.forEach(s => {
-                    function visitor(node: ts.Node): ts.Node {
-                        if (isBrFalse(node)) {
-                            const breakLabel = getBreakInstructionLabel(node.thenStatement.statements[0]);
-                            const breakToLabelSectionIndex = sections.findIndex(s => parseInt(s.index) == breakLabel);
-                            const beforeBreakToLabelSection = sections[breakToLabelSectionIndex - 1];
-                            const lastExpresion = beforeBreakToLabelSection.statements.slice(-1)[0];
+                let lastBrBool = -1;
+                let lastBrFalse = -1;
 
-                            console.log('node is brfalse !', current.index, breakLabel, !!lastExpresion, isBreakInstruction(lastExpresion));
-                            if (isBreakInstruction(lastExpresion)) {
-                                const resultLabel = getBreakInstructionLabel(lastExpresion);
-                                console.log('result label is ', resultLabel);
-
-                                const thenSection = sections.filter(s => (parseInt(s.index) >= breakLabel) && (parseInt(s.index) < resultLabel));
-                                console.log('then section is ', thenSection.length);
-                                const elseSection = sections.filter(s => (parseInt(s.index) > parseInt(current.index)) && (parseInt(s.index) < breakLabel));
-                                console.log('else section is ', elseSection.length);
-
-                                if (thenSection.length <= 1 && elseSection.length <= 1) {
-                                    console.log('then section is ', thenSection.length);
-                                    console.log('else section is ', elseSection.length);
-                                    // build if | else here
-                                }
-                            }
-                        }
-                        if (isBrTrue(node)) {
-                            console.log('node is brtrue !', current.index, getBreakInstructionLabel(node.thenStatement.statements[0]));
-                        }
-
-                        return ts.visitEachChild(node, visitor, context);
+                for (let index = 0; index < current.statements.length; index++) {
+                    const node = current.statements[index];
+                    if (isBrFalse(node)) {
+                        lastBrBool = index;
+                        lastBrFalse = index;
+                    } else if (isBrTrue(node)) {
+                        lastBrBool = index;
                     }
-                    visitor(s);
-                });
-                pre.push(current);
-                return pre;
+                }
+                if (lastBrBool !== -1 && lastBrFalse === lastBrBool) {
+                    const lastBrFalseNode = current.statements[lastBrFalse] as BrFalse;
+                    console.log( 
+                        current.index,
+                        '-----> ', ts.SyntaxKind[lastBrFalseNode.expression.kind],
+                        ts.SyntaxKind[(lastBrFalseNode.expression as ts.BinaryExpression).left.kind],
+                        (lastBrFalseNode.expression as ts.BinaryExpression).left.text,
+                        ts.SyntaxKind[(lastBrFalseNode.expression as ts.BinaryExpression).operatorToken.kind],
+                        ts.SyntaxKind[(lastBrFalseNode.expression as ts.BinaryExpression).right.kind],
+
+                    );
+
+                    const breakLabel = getBreakInstructionLabel(lastBrFalseNode.thenStatement.statements[0]);
+                    const breakToLabelSectionIndex = sections.findIndex(s => parseInt(s.index) == breakLabel);
+                    const beforeBreakToLabelSection = sections[breakToLabelSectionIndex - 1];
+                    const lastExpresion = beforeBreakToLabelSection.statements.slice(-1)[0];
+
+                    console.log('node is brfalse !', current.index, breakLabel, !!lastExpresion, isBreakInstruction(lastExpresion));
+                    if (isBreakInstruction(lastExpresion)
+                    
+                     || isSectionFallthrough(lastExpresion)
+                    ) {
+                        // [source]
+                        //      if (x)
+                        //          /*thenStatement*/
+                        //      else
+                        //          /*elseStatement*/
+                        //
+                        // [intermediate]
+                        //  .brfalse elseLabel, (x)
+                        //      /*thenStatement*/
+                        //  .br endLabel
+                        //  .mark elseLabel
+                        //      /*elseStatement*/
+                        //  .mark endLabel
+                        const statements: ts.Statement[] = [];
+
+                        const endLabel = isBreakInstruction(lastExpresion) ? getBreakInstructionLabel(lastExpresion) : breakLabel;
+                        console.log('result label is ', breakLabel, endLabel, );
+                        const thenSection = sections.filter(s => (parseInt(s.index) > parseInt(current.index)) && (parseInt(s.index) < breakLabel));
+                        const elseSection = sections.filter(s => (parseInt(s.index) >= breakLabel) && (parseInt(s.index) < endLabel));
+
+                        console.log('->  then section is ', thenSection.length, thenSection.map(s => s.index));
+                        console.log('->  else section is ', elseSection.length, elseSection.map(s => s.index));
+                        if (thenSection.length <= 1 && elseSection.length <= 1) {
+                            thenSection.forEach(s => s.merged = true);
+                            elseSection.forEach(s => s.merged = true);
+
+                            const thenStatements = [
+                                ...current.statements.slice(lastBrFalse + 1),
+                                ...thenSection.reduce((pre, s) => pre.concat(s.statements), [] as ts.Statement[]),
+                            ].slice(0, -1);
+                            const elseStatement = elseSection.reduce((pre, s) => pre.concat(s.statements), [] as ts.Statement[]);
+                            // build if | else here
+                            const condition = positiveExpression(lastBrFalseNode.expression, factory);
+                            const ifStatement = factory.createIfStatement(
+                                condition,
+                                factory.createBlock(thenStatements),
+                                elseStatement.length ? factory.createBlock(elseStatement) : undefined,
+                            );
+                            statements.push(...current.statements.slice(0, lastBrFalse), ifStatement);
+                            current.statements = statements;
+                        }
+                    } else {
+                        console.log('->  wtf?', isSectionFallthrough(lastExpresion));
+                        if (isSectionFallthrough(lastExpresion)) {
+                            console.log('->  wtf?', current.index, breakLabel);
+
+                            const thenSection = sections.filter(s => (parseInt(s.index) >= breakLabel) && (parseInt(s.index) < breakLabel));
+                            const elseSection = sections.filter(s => (parseInt(s.index) > parseInt(current.index)) && (parseInt(s.index) < breakLabel));
+
+                            console.log('->  then section is ', thenSection.length, thenSection.map(s => s.index));
+                            console.log('->  else section is ', elseSection.length, elseSection.map(s => s.index));
+
+                            
+                        }
+                    }
+                }
+                preSection.push(current);
+                return preSection;
             }, [] as AwaitSection[]);
         }
 
@@ -658,7 +729,9 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 _sections = joinTry(_sections);
                 _sections = joinIf(_sections);
                 count += 1;
-                if (count > 10) {
+                console.log('loop count', count);
+                
+                if (count > 2) {
                     break;
                 }
             }
@@ -754,7 +827,8 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                 factory.createModifier(ts.SyntaxKind.AsyncKeyword),
             ];
 
-            const transformed = removeSectionFallthrough(mapReturnInsturctions(factory.createBlock(body), context), context) as ts.Block;
+            // const transformed = removeSectionFallthrough(mapReturnInsturctions(factory.createBlock(body), context), context) as ts.Block;
+            const transformed = mapReturnInsturctions(factory.createBlock(body), context) as ts.Block;
 
             if (ts.isFunctionDeclaration(transformedNode)) {
                 return factory.createFunctionDeclaration(
