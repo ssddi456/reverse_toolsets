@@ -32,7 +32,10 @@ export const lebabTypes = {
     'includes': 1,
 };
 
-export default async function lebab_module(appName: string): Promise<void> {
+// ts-node -T bin\dewebpack.ts lebab_module public-worker-da0b9f6764.js dist\public-worker-da0b9f6764.js\moduleMap.json > log
+// ts-node -T bin\dewebpack.ts lebab_module pc-spread-sheet-pc-ee22693e11.js dist\pc-spread-sheet-pc-ee22693e11.js\moduleMap.json > log
+// ts-node -T bin\dewebpack.ts lebab_module pc-bundle_pc_view_lazy_module1-bdb3925bb9.js dist\pc-bundle_pc_view_lazy_module1-bdb3925bb9.js\moduleMap.json > log
+export default async function lebab_module(appName: string, fileMap?: Record<string, string>): Promise<void> {
     const distSubDir = path.join(distRoot, appName);
     const ifs = new InMemoryFileSystemHost();
     function loadAllFiles() {
@@ -47,14 +50,26 @@ export default async function lebab_module(appName: string): Promise<void> {
         });
         return names;
     }
-
-    const fileInfos = loadAllFiles();
+    function loadAllFilesFromConfig(config: Record<string, string>): FileInfo[] {
+        const ret: FileInfo[] = [];
+        for (const [tsName, sourceFileName] of Object.entries(config)) {
+            const realTsName = tsName.replace(/\.(js|json)$/, '.ts');
+            ifs.writeFileSync(realTsName, fs.readFileSync(sourceFileName, 'utf-8'));
+            const ifNumber = path.join(path.dirname(sourceFileName), path.basename(sourceFileName, path.extname(sourceFileName)));
+            ret.push({
+                tsName: realTsName,
+                ifNumber,
+                lebabName: `${ifNumber}_lebab.js`,
+            });
+        }
+        return ret;
+    }
+    const fileInfos = fileMap ? loadAllFilesFromConfig(fileMap) : loadAllFiles();
     // initialize
     const project = new Project({
         fileSystem: ifs,
     });
     project.resolveSourceFileDependencies();
-
 
     fileInfos.forEach(fileInfo => {
         const { tsName, lebabName } = fileInfo;
@@ -76,15 +91,21 @@ export default async function lebab_module(appName: string): Promise<void> {
 export function transformFile(sourceFile: SourceFile, { noLebab = false } = {}) {
 
     const moduleFunction = (() => {
-
-        const firstChild = sourceFile.getFirstDescendantByKindOrThrow(SyntaxKind.ExpressionStatement)
-            .getFirstChild();
-        if (!firstChild) {
+        try {
+            const firstChild = sourceFile.getFirstDescendantByKindOrThrow(SyntaxKind.ExpressionStatement)
+                .getFirstChild();
+            if (!firstChild) {
+                throw new Error('module function not found');
+            }
+            if (Node.isArrowFunction(firstChild)
+                || Node.isFunctionDeclaration(firstChild)
+            ) {
+                return firstChild;
+            }
             throw new Error('module function not found');
-        }
-        if (Node.isArrowFunction(firstChild)
-            || Node.isFunctionDeclaration(firstChild)
-        ) {
+        } catch (error) {
+            const firstChild = sourceFile.getFirstDescendantByKindOrThrow(SyntaxKind.FunctionDeclaration);
+            console.log('module function not found, use function declaration instead');
             return firstChild;
         }
     })();

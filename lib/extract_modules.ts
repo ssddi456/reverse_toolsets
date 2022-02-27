@@ -13,6 +13,7 @@ export default async function (appName: string) {
     const printer = ts.createPrinter({});
 
     const nodes = findNodeWithTreeTypeChildren<ts.CallExpression>(sourceFile, [
+        // !()
         (node) => ts.isPrefixUnaryExpression(node)
             && node.operator === ts.SyntaxKind.ExclamationToken
             && ts.isExpressionStatement(node.parent)

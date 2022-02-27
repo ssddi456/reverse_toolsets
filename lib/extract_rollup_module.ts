@@ -20,7 +20,7 @@ export default async function (appName: string) {
         fileSystem: ifs,
     });
     const sourceFile = project.addSourceFileAtPath(tsName)!;
-
+    // (() => { <here>})()
     const block = sourceFile.getFirstDescendantByKind(SyntaxKind.ExpressionStatement)!
         .getFirstChildByKind(SyntaxKind.CallExpression)!
         .getFirstChildByKind(SyntaxKind.ParenthesizedExpression)!
@@ -45,7 +45,8 @@ export default async function (appName: string) {
             varList.slice(1).forEach(element => {
                 restNodes.push(element);
             });
-
+            
+            // var e={[k: number]:(module,exports,require)=>{ // <here> }}
             const varNode = varList[0];
             const varName = varNode
                 .getNameNode()

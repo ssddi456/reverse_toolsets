@@ -3,6 +3,7 @@
 import * as commander from 'commander';
 import extract_modules from '../lib/extract_modules';
 import extract_rollup_module from '../lib/extract_rollup_module';
+import extract_named_modules from '../lib/extract_named_modules';
 import lebab_module from '../lib/lebab_module';
 import lebab_rollup_module from '../lib/lebab_rollup_module';
 import optimize_decompile from '../lib/optimize_decompile';
@@ -13,6 +14,7 @@ import modify_index from '../lib/modify_index';
 import update_imports from '../lib/update_imports';
 import { restoreFromSourceMap } from '../lib/restore_from_sourcemap';
 import { walkDir } from '../lib/walk_dir';
+import * as fs from 'fs-extra';
 
 const program = new commander.Command();
 program.command('extract_modules [appName]')
@@ -23,13 +25,28 @@ program.command('extract_rollup_module [appName]')
     .action((appName) => {
         extract_rollup_module(appName);
     });
+program.command('extract_named_modules [appName]')
+    .action((appName) => {
+        extract_named_modules(appName);
+    });
 program.command('lebab_rollup_module [appName]')
     .action((appName) => {
         lebab_rollup_module(appName)
     });
-program.command('lebab_module [appName]')
-    .action((appName) => {
-        lebab_module(appName)
+program.command('lebab_module [appName] <config>')
+    .action((appName, config) => {
+        if (config) {
+            const fileMap = (() => {
+                try {
+                    return require(config);
+                } catch (error) {
+                    return fs.readJSONSync(config);
+                }
+            })();
+            lebab_module(appName, fileMap);
+        } else {
+            lebab_module(appName)
+        }
     });
 program.command('optimize_decompile [appName]')
     .action((appName) => {
