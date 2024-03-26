@@ -17,23 +17,29 @@ import { walkDir } from '../lib/walk_dir';
 import * as fs from 'fs-extra';
 
 const program = new commander.Command();
-program.command('extract_modules [appName]')
+program.command('extract_modules')
+    .argument('<bundleName>', 'bundle file name')
     .action((appName) => {
         extract_modules(appName);
     });
-program.command('extract_rollup_module [appName]')
+program.command('extract_rollup_module')
+    .argument('<bundleName>', 'bundle file name')
     .action((appName) => {
         extract_rollup_module(appName);
     });
-program.command('extract_named_modules [appName]')
+program.command('extract_named_modules')
+    .argument('<bundleName>', 'bundle file name')
     .action((appName) => {
         extract_named_modules(appName);
     });
-program.command('lebab_rollup_module [appName]')
+program.command('lebab_rollup_module')
+    .argument('<bundleName>', 'bundle file name')
     .action((appName) => {
         lebab_rollup_module(appName)
     });
-program.command('lebab_module [appName] <config>')
+program.command('lebab_module')
+    .argument('<bundleName>', 'bundle file name')
+    .argument('[config', 'config file name')
     .action((appName, config) => {
         if (config) {
             const fileMap = (() => {
@@ -48,49 +54,56 @@ program.command('lebab_module [appName] <config>')
             lebab_module(appName)
         }
     });
-program.command('optimize_decompile [appName]')
+program.command('optimize_decompile')
+    .argument('<bundleName>', 'bundle file name')
     .action((appName) => {
         optimize_decompile(appName)
     });
-program.command('optimize_rollup_decompile [appName]')
+program.command('optimize_rollup_decompile')
+    .argument('<bundleName>', 'bundle file name')
     .action((appName) => {
         optimize_rollup_decompile(appName)
     });
-program.command('repack_rollup_module [appName]')
+program.command('repack_rollup_module')
+    .argument('<bundleName>', 'bundle file name')
     .action((appName) => {
         repack_rollup_module(appName)
     });
-program.command('create_module_info [appName]')
+program.command('create_module_info')
+    .argument('<bundleName>', 'bundle file name')
     .action((appName) => {
         create_module_info(appName)
     });
-program.command('modify_index [appName]')
+program.command('modify_index')
+    .argument('<bundleName>', 'bundle file name')
     .action((appName) => {
         modify_index(appName)
     });
-program.command('update_imports [appName]')
+program.command('update_imports')
+    .argument('<bundleName>', 'bundle file name')
     .action((appName) => {
         update_imports(appName)
     });
-program.command('all [appName]')
+program.command('all')
+    .argument('<bundleName>', 'bundle file name')
     .action(async (appName) => {
         await extract_modules(appName);
         await lebab_module(appName);
         await optimize_decompile(appName);
     });
-program.command('all_rollup [appName]')
+program.command('all_rollup')
+    .argument('<bundleName>', 'bundle file name')
     .action(async (appName) => {
         await extract_rollup_module(appName);
         await lebab_rollup_module(appName);
         await optimize_rollup_decompile(appName);
     });
-program.command('restore_from_sourcemap [pattern] [output]')
-    .action(async (pattern, output) => {
-        walkDir({
-            pattern,
-            output,
-            callback: restoreFromSourceMap
-        });
+
+program.command('restore_from_sourcemap')
+    .argument('<sourceMapFile>', 'sourcemap file name')
+    .argument('<generatedFile>', 'generated file name')
+    .action(async (sourceMapFile, generatedFile) => {
+        restoreFromSourceMap(sourceMapFile, generatedFile);
     });
 
 program.parse(process.argv);

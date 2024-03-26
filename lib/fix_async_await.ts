@@ -618,7 +618,7 @@ export function fixAsyncAwait(context: ts.TransformationContext) {
                         current.index,
                         '-----> ', ts.SyntaxKind[lastBrFalseNode.expression.kind],
                         ts.SyntaxKind[(lastBrFalseNode.expression as ts.BinaryExpression).left.kind],
-                        (lastBrFalseNode.expression as ts.BinaryExpression).left.text,
+                        (lastBrFalseNode.expression as ts.BinaryExpression).left.getText(),
                         ts.SyntaxKind[(lastBrFalseNode.expression as ts.BinaryExpression).operatorToken.kind],
                         ts.SyntaxKind[(lastBrFalseNode.expression as ts.BinaryExpression).right.kind],
 
