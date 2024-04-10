@@ -7,10 +7,10 @@ import { transformClasses } from "./isClasses";
 import { transformSpreadAssignmentCall } from "./isSpreadAssignmentCall";
 import { transformReactCreateElementToJsx } from "./transformReactCreateElementToJsx";
 import * as ts from 'typescript';
-import { transformFixBlock, transformExpandStatement } from "./fix_block";
-import { fixKeywordShortcut } from "./fix_keyword_shortcut";
-import { fixAsyncAwait } from "./fix_async_await";
-import { fixOptionalChaining } from "./fix_optional_chaining";
+import { transformFixBlock, transformExpandStatement } from "./fixes/fix_block";
+import { fixKeywordShortcut } from "./fixes/fix_keyword_shortcut";
+import { fixAsyncAwait } from "./fixes/fix_async_await";
+import { fixOptionalChaining } from "./fixes/fix_optional_chaining";
 
 // ts-node -T bin\dewebpack.ts update_imports index.min.js > log
 export default async function updateImports(appName: string) {

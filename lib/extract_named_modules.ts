@@ -5,9 +5,12 @@ import { source, distRoot } from './consts';
 import { InMemoryFileSystemHost, SyntaxKind } from '@ts-morph/common';
 import { Node, ObjectLiteralExpression, Project, PropertyAssignment } from 'ts-morph';
 
-// ts-node -T bin\dewebpack.ts extract_named_modules public-worker-da0b9f6764.js > log
-// ts-node -T bin\dewebpack.ts extract_named_modules pc-spread-sheet-pc-ee22693e11.js > log
-// ts-node -T bin\dewebpack.ts extract_named_modules pc-bundle_pc_view_lazy_module1-bdb3925bb9.js > log
+// ts-node -T bin/dewebpack.ts extract_named_modules plugins/plugins.myworker.worker.js > log
+// ts-node -T bin/dewebpack.ts extract_named_modules plugins/umi.js > log
+// ts-node -T bin/dewebpack.ts extract_named_modules plugins/extension.js > log
+// ts-node -T bin/dewebpack.ts extract_named_modules public-worker-da0b9f6764.js > log
+// ts-node -T bin/dewebpack.ts extract_named_modules pc-spread-sheet-pc-ee22693e11.js > log
+// ts-node -T bin/dewebpack.ts extract_named_modules pc-bundle_pc_view_lazy_module1-bdb3925bb9.js > log
 export default async function (appName: string) {
     const ifs = new InMemoryFileSystemHost();
     const tsName = `${appName}.ts`;
@@ -53,8 +56,7 @@ export default async function (appName: string) {
         const propName = prop.getNameNode()!.getText().replace(/^['"]|['"]$/g, '');
         return propName;
     });
-    const NameCharBlackReg = /[?\/*"'<>|]/;
-
+    const NameCharBlackReg = /[?\/*"'<>|+]/;
 
     console.log(JSON.stringify(names, null, 2));
 
@@ -66,7 +68,7 @@ export default async function (appName: string) {
             sep.shift();
         }
         console.log(`${name} ${count} ${pre}`);
-        
+
         return Math.max(pre, count);
     }, 0))].map(() => path.basename(appName, path.extname(appName)));
 
@@ -76,27 +78,36 @@ export default async function (appName: string) {
             throw new Error(`${prop.getKindName()} i is not PropertyAssignment`);
         }
         const propName = prop.getNameNode()!.getText().replace(/^['"]|['"]$/g, '');
-        console.log(`${i} ${propName}`);
-        const moduleName = propName.split('/').map(dir => {
-            if (dir.match(NameCharBlackReg)) {
-                console.log(`${dir} is not valid name ${encodeEx(dir)}`);
-
-                return encodeEx(dir);
-            }
-            return dir
-        }).join('/');
-        if (propName.indexOf('/node_modules/') >= 0) { 
+        if (propName.indexOf('/node_modules/') >= 0) {
             console.log('skip node_modules');
             return pre;
         }
-        const filepath = path.join(distSubRoot, ...dirs, moduleName);
+
+        console.log(`${i} ${propName}`);
+        const filepath = propName.length < 6
+            ? path.join(distSubRoot, encodeEx(propName))
+            : (() => {
+                const moduleName = propName.split('/').map(dir => {
+                    if (dir.match(NameCharBlackReg)) {
+                        console.log(`${dir} is not valid name ${encodeEx(dir)}`);
+
+                        return encodeEx(dir);
+                    }
+                    return dir
+                }).join('/');
+
+                const filepath = path.join(distSubRoot, ...dirs, moduleName);
+                return filepath;
+            })();
+
         const dirName = path.dirname(filepath);
         fs.ensureDirSync(dirName);
+
         fs.writeFileSync(filepath, prop.getInitializerOrThrow().getText());
         pre[propName] = filepath;
         return pre;
     }, {} as Record<string, string>);
-    
+
     fs.writeJSONSync(path.join(distSubRoot, 'moduleMap.json'), moduleMap);
     // const main = fs.createWriteStream(path.join(distSubRoot, 'index.js'));
     // main.write('() => {\n');
@@ -130,5 +141,6 @@ function encodeEx(str: string): string {
         .replace(/\"/g, '%22')
         .replace(/\</g, '%3C')
         .replace(/\>/g, '%3E')
-        .replace(/\|/g, '%7C');
+        .replace(/\|/g, '%7C')
+        .replace(/\+/g, '%2B');
 }

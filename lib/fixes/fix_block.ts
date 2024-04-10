@@ -1,6 +1,6 @@
 import * as ts from "typescript";
 import { fixOptionalChaining } from "./fix_optional_chaining";
-import { testTransformer } from "./utils";
+import { testTransformer } from "../utils";
 
 
 export function transformFixBlock(context: ts.TransformationContext) {

@@ -13,10 +13,15 @@ import create_module_info from '../lib/create_module_info';
 import modify_index from '../lib/modify_index';
 import update_imports from '../lib/update_imports';
 import { restoreFromSourceMap } from '../lib/restore_from_sourcemap';
-import { walkDir } from '../lib/walk_dir';
+import { doPretty } from '../lib/prettier';
 import * as fs from 'fs-extra';
 
 const program = new commander.Command();
+program.command('prettier')
+    .argument('<bundleName>', 'bundle file name')
+    .action((appName) => {
+        doPretty(appName);
+    });
 program.command('extract_modules')
     .argument('<bundleName>', 'bundle file name')
     .action((appName) => {

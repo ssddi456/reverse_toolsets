@@ -1,5 +1,5 @@
 import * as ts from "typescript";
-import { testTransformer } from "./utils";
+import { testTransformer } from "../utils";
 
 
 export function fixKeywordShortcut (context: ts.TransformationContext) {

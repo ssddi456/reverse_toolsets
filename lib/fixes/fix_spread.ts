@@ -1,5 +1,5 @@
 import * as ts from 'typescript';
-import { isParenthesizedNamedCallExpression, testTransformer } from './utils';
+import { isParenthesizedNamedCallExpression, testTransformer } from '../utils';
 
 export function fixSpreadArray(context: ts.TransformationContext) {
     const factory = context.factory;

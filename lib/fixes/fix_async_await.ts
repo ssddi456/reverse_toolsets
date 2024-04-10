@@ -3,7 +3,7 @@
 import { IfStatement } from "ts-morph";
 import * as ts from "typescript";
 import { expandStatements, transformExpandStatement } from "./fix_block";
-import { isBlockLike, isParenthesizedNamedCallExpression, replaceExpression, testTransformer, updateBlocklike, makeRemoveExpressionOfType } from "./utils";
+import { isBlockLike, isParenthesizedNamedCallExpression, replaceExpression, testTransformer, updateBlocklike, makeRemoveExpressionOfType } from "../utils";
 
 function getInstructionName(instruction: number): string {
     switch (instruction) {

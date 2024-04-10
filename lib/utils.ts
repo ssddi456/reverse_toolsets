@@ -1,5 +1,5 @@
-
 import * as ts from "typescript";
+import * as tsModule from "ts-morph";
 import * as fs from "fs";
 import { createSourceFile } from "./compiler";
 import { VisitResult } from "typescript";
@@ -326,4 +326,51 @@ export function makeRemoveExpressionOfType(test: (node: ts.Node) => boolean) {
         }
         return ts.visitEachChild(node, _transformer, context);
     };
+}
+
+export function createExpressPatternFromCode (code: string) {
+    const project = new tsModule.Project({
+        useInMemoryFileSystem: true,
+    });
+    const sourceFile = project.createSourceFile('test.ts', code);
+    const expression = sourceFile.getChildren()[0];
+
+    return expression!;
+}
+
+export function matchExpressionWithPattern (pattern:  tsModule.Node, expression:  tsModule.Node) {
+    // travisal expression to match pattern. check if node type is same, and check children node type is same
+
+    // console.log('pattern', pattern.getKindName(), 'expression', expression.getKindName());
+    if (pattern.getKind() !== expression.getKind()) {
+        return false;
+    }
+
+    // console.log('pattern', pattern.getChildCount(), 'expression', expression.getChildCount());
+    // console.log('pattern', pattern.getDescendants().length, 'expression', expression.getDescendants().length);
+
+    const patternChildren = pattern.getDescendants();
+    const expressionChildren = expression.getDescendants();
+    if (patternChildren.length !== expressionChildren.length) {
+        return false;
+    }
+
+    for (let i = 0; i < patternChildren.length; i++) {
+        const patternChild = patternChildren[i];
+        const expressionChild = expressionChildren[i];
+
+        if (!matchExpressionWithPattern(patternChild, expressionChild)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+export function loadSourceCode(filename: string, code: string) {
+    const project = new tsModule.Project({
+        useInMemoryFileSystem: true,
+    });
+    const sourceFile = project.createSourceFile(filename, code);
+
+    return sourceFile;
 }
