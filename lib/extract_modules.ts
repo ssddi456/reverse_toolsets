@@ -20,6 +20,7 @@ export default async function (appName: string) {
             && ts.isSourceFile(node.parent.parent),
         {
             test: (node) => {
+                // => xxx(a, b)
                 const ret = ts.isCallExpression(node)
                     && node.arguments.length === 2
                     && ts.isPrefixUnaryExpression(node.parent);
@@ -29,6 +30,7 @@ export default async function (appName: string) {
         },
         {
             test: (node) => {
+                // => xxx([a, b, c]])
                 const ret = ts.isCallExpression(node)
                     && ts.isCallExpression(node.parent)
                     && node.arguments.length == 1

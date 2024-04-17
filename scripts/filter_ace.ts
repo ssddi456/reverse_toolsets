@@ -3,7 +3,7 @@ import * as ts from 'typescript';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as tsMorph from 'ts-morph';
-import { createExpressPatternFromCode, loadSourceCode, matchExpressionWithPattern } from '../lib/utils';
+import { createExpressPatternFromCode, loadSourceCode, matchExpressionWithPattern, renameModuleWrapper } from '../lib/utils';
 import { extractModuleInfo } from '../lib/create_module_info';
 import { intersection } from 'lodash';
 
@@ -60,24 +60,8 @@ async function renameTopLevelSymbols() {
         const code = fs.readFileSync(path.join(source, element), 'utf-8');
         
         const sourceFile = loadSourceCode('temp.ts', code);
-        const topFunction = sourceFile.getFirstDescendantByKind(tsMorph.SyntaxKind.FunctionDeclaration);
-        if (topFunction) {
-            const params = topFunction.getParameters();
-            if (params[0] && params[0].getName() === 'e') {
-                const e = params[0];
-                e.rename('module');
-            }
-            if (params[1] && params[1].getName() === 't') {
-                const t = params[1];
-                t.rename('exports');
-            }
-            if (params[2] && params[2].getName() === 'n') {
-                const n = params[2];
-                n.rename('require');
-            }
-
-            fs.writeFileSync(path.join(source, element), sourceFile.getFullText());
-        }
+        renameModuleWrapper(sourceFile);
+        fs.writeFileSync(path.join(source, element), sourceFile.getFullText());
     }
 }
 

@@ -15,6 +15,7 @@ import update_imports from '../lib/update_imports';
 import { restoreFromSourceMap } from '../lib/restore_from_sourcemap';
 import { doPretty } from '../lib/prettier';
 import * as fs from 'fs-extra';
+import extract_array_modules from '../lib/extract_array_modules';
 
 const program = new commander.Command();
 program.command('prettier')
@@ -26,6 +27,11 @@ program.command('extract_modules')
     .argument('<bundleName>', 'bundle file name')
     .action((appName) => {
         extract_modules(appName);
+    });
+program.command('extract_array_modules')
+    .argument('<bundleName>', 'bundle file name')
+    .action((appName) => {
+        extract_array_modules(appName);
     });
 program.command('extract_rollup_module')
     .argument('<bundleName>', 'bundle file name')

@@ -1,5 +1,5 @@
 import * as ts from "typescript";
-import * as tsModule from "ts-morph";
+import * as tsMorph from "ts-morph";
 import * as fs from "fs";
 import { createSourceFile } from "./compiler";
 import { VisitResult } from "typescript";
@@ -329,7 +329,7 @@ export function makeRemoveExpressionOfType(test: (node: ts.Node) => boolean) {
 }
 
 export function createExpressPatternFromCode (code: string) {
-    const project = new tsModule.Project({
+    const project = new tsMorph.Project({
         useInMemoryFileSystem: true,
     });
     const sourceFile = project.createSourceFile('test.ts', code);
@@ -338,7 +338,7 @@ export function createExpressPatternFromCode (code: string) {
     return expression!;
 }
 
-export function matchExpressionWithPattern (pattern:  tsModule.Node, expression:  tsModule.Node) {
+export function matchExpressionWithPattern (pattern:  tsMorph.Node, expression:  tsMorph.Node) {
     // travisal expression to match pattern. check if node type is same, and check children node type is same
 
     // console.log('pattern', pattern.getKindName(), 'expression', expression.getKindName());
@@ -367,10 +367,29 @@ export function matchExpressionWithPattern (pattern:  tsModule.Node, expression:
 }
 
 export function loadSourceCode(filename: string, code: string) {
-    const project = new tsModule.Project({
+    const project = new tsMorph.Project({
         useInMemoryFileSystem: true,
     });
     const sourceFile = project.createSourceFile(filename, code);
 
     return sourceFile;
+}
+
+export function renameModuleWrapper(sourceFile: tsMorph.SourceFile) {
+    const topFunction = sourceFile.getFirstDescendantByKind(tsMorph.SyntaxKind.FunctionDeclaration);
+    if (topFunction) {
+        const params = topFunction.getParameters();
+        if (params[0]) {
+            const e = params[0];
+            e.rename('module');
+        }
+        if (params[1]) {
+            const t = params[1];
+            t.rename('exports');
+        }
+        if (params[2]) {
+            const n = params[2];
+            n.rename('require');
+        }
+    }
 }
